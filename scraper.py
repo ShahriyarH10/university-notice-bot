@@ -1,6 +1,7 @@
-import requests 
-from bs4 import BeautifulSoup
 import os
+from bs4 import BeautifulSoup
+import requests
+from playwright.sync_api import sync_playwright
 
 # --- Configuration ---
 NOTICE_URL = "https://www.aiub.edu/category/notices" 
@@ -11,30 +12,32 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 def get_latest_notice():
-    # Added a more complex User-Agent so AIUB's server doesn't mistake us for a spam bot
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-    
     try:
-        response = requests.get(NOTICE_URL, headers=headers)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Smart Parser: Look at every single link on the page
-        for link in soup.find_all('a'):
-            title = link.text.strip()
-            href = link.get('href', '')
+        # Start a real, invisible browser session
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
             
-            # Notices have long, descriptive titles. Menus/Buttons have short titles.
-            # We filter for links with more than 35 characters in the text, 
-            # and ignore footer links that just spell out the university name.
-            if len(title) > 35 and href and not href.startswith('#') and "American International University" not in title:
+            # Go to the website and wait until the network goes quiet (meaning JS is done loading)
+            page.goto(NOTICE_URL, wait_until="networkidle")
+            
+            # Grab the HTML *after* the JavaScript has executed
+            html = page.content()
+            browser.close()
+
+            # Now parse it just like before
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            for link in soup.find_all('a'):
+                title = link.text.strip()
+                href = link.get('href', '')
                 
-                # Format the link correctly if it's a relative path
-                if not href.startswith('http'):
-                    href = "https://www.aiub.edu" + href
+                # Filter for long notice titles
+                if len(title) > 35 and href and not href.startswith('#') and "American International University" not in title:
+                    if not href.startswith('http'):
+                        href = "https://www.aiub.edu" + href
+                    return title, href
                     
-                return title, href
-                
     except Exception as e:
         print(f"Error fetching the webpage: {e}")
         
@@ -67,14 +70,12 @@ def main():
         print("Could not find any notices on the page.")
         return
 
-    # Check against the last saved notice
     if os.path.exists(LAST_NOTICE_FILE):
         with open(LAST_NOTICE_FILE, "r", encoding="utf-8") as file:
             last_saved_title = file.read().strip()
     else:
         last_saved_title = ""
 
-    # If new notice, alert and save
     if latest_title != last_saved_title:
         print(f"New notice found: {latest_title}")
         send_telegram_alert(latest_title, latest_link)
