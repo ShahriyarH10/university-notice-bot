@@ -1,0 +1,36 @@
+name: Hourly Notice Scraper
+
+on:
+  schedule:
+    - cron: '0 * * * *' # Runs at minute 0 past every hour
+  workflow_dispatch: # Allows you to trigger it manually for testing
+
+jobs:
+  scrape-and-notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4
+
+      - name: Run Scraper
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scraper.py
+
+      - name: Commit and Push state
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+          git add last_notice.txt
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update last notice state" && git push)
