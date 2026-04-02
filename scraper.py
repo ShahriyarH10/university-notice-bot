@@ -13,9 +13,15 @@ SCRAPER_API_KEY = os.getenv('SCRAPER_API_KEY')
 
 def get_latest_notice():
     try:
-        # Route our request through ScraperAPI's residential proxy network
-        payload = {'api_key': SCRAPER_API_KEY, 'url': NOTICE_URL}
-        response = requests.get('http://api.scraperapi.com', params=payload)
+        # Route our request through ScraperAPI AND tell it to render JS to bypass Cloudflare
+        payload = {
+            'api_key': SCRAPER_API_KEY, 
+            'url': NOTICE_URL, 
+            'render': 'true'  # <--- THIS SOLVES THE PUZZLE
+        }
+        
+        # Give it up to 60 seconds to solve the puzzle and load the page
+        response = requests.get('http://api.scraperapi.com', params=payload, timeout=60)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.text, 'html.parser')
