@@ -1,7 +1,6 @@
 import os
 from bs4 import BeautifulSoup
-import requests
-from playwright.sync_api import sync_playwright
+from curl_cffi import requests
 
 # --- Configuration ---
 NOTICE_URL = "https://www.aiub.edu/category/notices" 
@@ -13,35 +12,21 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 def get_latest_notice():
     try:
-        # Start a real, invisible browser session
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
+        # This one line magically spoofs a real Chrome browser to bypass Cloudflare
+        response = requests.get(NOTICE_URL, impersonate="chrome120", timeout=30)
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        for link in soup.find_all('a'):
+            title = link.text.strip()
+            href = link.get('href', '')
             
-            # 1. Change wait condition to domcontentloaded
-            # 2. Increase maximum timeout to 60 seconds (60000ms)
-            page.goto(NOTICE_URL, wait_until="domcontentloaded", timeout=60000)
-            
-            # Force the browser to wait exactly 5 seconds for the JS to inject the notices
-            page.wait_for_timeout(5000)
-            
-            # Grab the HTML
-            html = page.content()
-            browser.close()
-
-            # Parse it
-            soup = BeautifulSoup(html, 'html.parser')
-            
-            for link in soup.find_all('a'):
-                title = link.text.strip()
-                href = link.get('href', '')
+            # Filter for long notice titles
+            if len(title) > 35 and href and not href.startswith('#') and "American International University" not in title:
+                if not href.startswith('http'):
+                    href = "https://www.aiub.edu" + href
+                return title, href
                 
-                # Filter for long notice titles
-                if len(title) > 35 and href and not href.startswith('#') and "American International University" not in title:
-                    if not href.startswith('http'):
-                        href = "https://www.aiub.edu" + href
-                    return title, href
-                    
     except Exception as e:
         print(f"Error fetching the webpage: {e}")
         
@@ -61,8 +46,7 @@ def send_telegram_alert(title, link):
     }
     
     try:
-        response = requests.post(url, data=data)
-        response.raise_for_status()
+        requests.post(url, data=data, impersonate="chrome120")
         print("Telegram alert sent successfully!")
     except Exception as e:
         print(f"Failed to send Telegram message: {e}")
