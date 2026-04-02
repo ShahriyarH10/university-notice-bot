@@ -28,9 +28,10 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python scraper.py
 
-      - name: Commit and Push state
+     - name: Commit and Push state
         run: |
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
+          touch last_notice.txt # This ensures the file exists so git add doesn't crash
           git add last_notice.txt
           git diff --quiet && git diff --staged --quiet || (git commit -m "Update last notice state" && git push)
