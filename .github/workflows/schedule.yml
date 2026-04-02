@@ -3,36 +3,81 @@ name: Hourly Notice Scraper
 on:
   schedule:
     - cron: '0 * * * *'
-  workflow_dispatch:
+  workflow_dispatch:         # keep for manual triggering / debugging
+
+# Prevent overlapping runs — if a new run starts, cancel the in-progress one
+concurrency:
+  group: notice-scraper
+  cancel-in-progress: false  # 'false' = queue it, not cancel (safer for state)
 
 jobs:
   scrape-and-notify:
     runs-on: ubuntu-latest
+    # Explicit permissions — principle of least privilege
+    permissions:
+      contents: write        # needed for git push
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # Fetch the actual latest commit, not a cached ref,
+          # so we always read the most recently committed last_notice.txt
+          ref: ${{ github.ref }}
+          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
+
+      # Cache pip dependencies — speeds up runs significantly
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4
+          pip install -r requirements.txt
 
       - name: Run Scraper
+        id: scraper                          # give it an id so we can check outcome
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          SCRAPER_API_KEY:    ${{ secrets.SCRAPER_API_KEY }}
         run: python scraper.py
 
-      - name: Commit and Push state
+      # Only attempt to commit if the scraper actually succeeded
+      - name: Commit and push state file
+        if: success()
         run: |
-          git config --global user.name "GitHub Actions Bot"
-          git config --global user.email "actions@github.com"
-          touch last_notice.txt
-          git add last_notice.txt
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Update last notice state" && git push)
+          git config --global user.name  "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Only stage last_notice.txt if it was actually modified
+          # (no 'touch' — that was causing false dirty states)
+          if ! git diff --quiet last_notice.txt; then
+            git add last_notice.txt
+            git commit -m "chore: update notice state [skip ci]"
+            git push
+          else
+            echo "State unchanged — nothing to commit."
+          fi
+
+      # Alert you in Telegram if the whole job fails
+      - name: Notify on job failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="⚠️ *AIUB Scraper Failed*%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            -d parse_mode="Markdown"
