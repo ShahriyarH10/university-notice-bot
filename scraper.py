@@ -19,60 +19,53 @@ SCRAPER_API_KEY    = os.getenv('SCRAPER_API_KEY')
 
 
 def get_latest_notice():
-    """
-    Page structure (confirmed by inspection):
+    # Try render=true first, fall back to render=false if it fails
+    attempts = [
+        {'api_key': SCRAPER_API_KEY, 'url': NOTICE_URL, 'render': 'true'},
+        {'api_key': SCRAPER_API_KEY, 'url': NOTICE_URL, 'render': 'false'},
+    ]
 
-        <a href="/some-notice-slug">          ← outer link (href = full notice URL)
-          <div>                               ← date block (day / month / year)
-          <h2>Notice Title Here</h2>
-          <p>Short excerpt…</p>
-          <a href="/some-notice-slug">Details</a>   ← inner duplicate link
-        </a>
+    for payload in attempts:
+        mode = payload['render']
+        try:
+            log.info("Trying ScraperAPI with render=%s…", mode)
+            response = requests.get(
+                'http://api.scraperapi.com',
+                params=payload,
+                timeout=90          # increased from 60 — render mode needs more time
+            )
+            response.raise_for_status()
 
-    Strategy: select every <h2> inside a top-level notice <a>, then walk up
-    to grab the href from that parent <a>.
-    """
-    try:
-        payload = {
-            'api_key': SCRAPER_API_KEY,
-            'url':     NOTICE_URL,
-            'render':  'true',
-        }
-        response = requests.get(
-            'http://api.scraperapi.com',
-            params=payload,
-            timeout=60
-        )
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
+            soup = BeautifulSoup(response.text, 'html.parser')
 
-        # Every notice card is: <a href="..."><..date..><h2>Title</h2>...</a>
-        # Find all <a> tags that directly contain an <h2> — these are the cards.
-        notice_cards = [
-            a for a in soup.find_all('a', href=True)
-            if a.find('h2')
-        ]
+            notice_cards = [
+                a for a in soup.find_all('a', href=True)
+                if a.find('h2')
+            ]
 
-        if not notice_cards:
-            log.warning("No notice cards found — page structure may have changed.")
-            return None, None
+            if not notice_cards:
+                log.warning("render=%s: page loaded but no notice cards found.", mode)
+                continue            # try next attempt
 
-        first = notice_cards[0]
-        title = first.find('h2').get_text(strip=True)
-        href  = first['href']
+            first = notice_cards[0]
+            title = first.find('h2').get_text(strip=True)
+            href  = first['href']
 
-        if not href.startswith('http'):
-            href = "https://www.aiub.edu" + href
+            if not href.startswith('http'):
+                href = "https://www.aiub.edu" + href
 
-        return title, href
+            log.info("Success with render=%s", mode)
+            return title, href
 
-    except requests.RequestException as e:
-        log.error("Network error: %s", e)
-    except Exception as e:
-        log.error("Unexpected error: %s", e)
+        except requests.HTTPError as e:
+            log.warning("render=%s failed with HTTP error: %s — trying next option.", mode, e)
+        except requests.RequestException as e:
+            log.warning("render=%s failed with network error: %s — trying next option.", mode, e)
+        except Exception as e:
+            log.error("Unexpected error with render=%s: %s", mode, e)
 
+    log.error("All ScraperAPI attempts exhausted.")
     return None, None
-
 
 def send_telegram_alert(title: str, link: str) -> bool:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
