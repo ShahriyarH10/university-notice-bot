@@ -18,14 +18,18 @@ def get_latest_notice():
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
             
-            # Go to the website and wait until the network goes quiet (meaning JS is done loading)
-            page.goto(NOTICE_URL, wait_until="networkidle")
+            # 1. Change wait condition to domcontentloaded
+            # 2. Increase maximum timeout to 60 seconds (60000ms)
+            page.goto(NOTICE_URL, wait_until="domcontentloaded", timeout=60000)
             
-            # Grab the HTML *after* the JavaScript has executed
+            # Force the browser to wait exactly 5 seconds for the JS to inject the notices
+            page.wait_for_timeout(5000)
+            
+            # Grab the HTML
             html = page.content()
             browser.close()
 
-            # Now parse it just like before
+            # Parse it
             soup = BeautifulSoup(html, 'html.parser')
             
             for link in soup.find_all('a'):
