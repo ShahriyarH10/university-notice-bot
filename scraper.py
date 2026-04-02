@@ -1,19 +1,22 @@
 import os
+import requests
 from bs4 import BeautifulSoup
-from curl_cffi import requests
 
 # --- Configuration ---
 NOTICE_URL = "https://www.aiub.edu/category/notices" 
 LAST_NOTICE_FILE = "last_notice.txt"
 
-# --- Securely fetch Telegram Credentials ---
+# --- Securely fetch Credentials ---
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+SCRAPER_API_KEY = os.getenv('SCRAPER_API_KEY')
 
 def get_latest_notice():
     try:
-        # This one line magically spoofs a real Chrome browser to bypass Cloudflare
-        response = requests.get(NOTICE_URL, impersonate="chrome120", timeout=30)
+        # Route our request through ScraperAPI's residential proxy network
+        payload = {'api_key': SCRAPER_API_KEY, 'url': NOTICE_URL}
+        response = requests.get('http://api.scraperapi.com', params=payload)
+        response.raise_for_status()
         
         soup = BeautifulSoup(response.text, 'html.parser')
         
@@ -46,7 +49,7 @@ def send_telegram_alert(title, link):
     }
     
     try:
-        requests.post(url, data=data, impersonate="chrome120")
+        requests.post(url, data=data)
         print("Telegram alert sent successfully!")
     except Exception as e:
         print(f"Failed to send Telegram message: {e}")
