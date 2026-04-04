@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 import logging
 from bs4 import BeautifulSoup
@@ -65,19 +66,14 @@ def get_latest_notice():
     if not href.startswith('http'):
         href = "https://www.aiub.edu" + href
 
-    # --- Clean date extraction ---
-    # The card contains 3 separate text nodes: day, month, year
-    # Collect all text nodes, filter to only the date parts (before the title)
-    all_text = [t.strip() for t in first.strings if t.strip()]
-    # Date is always the first 3 tokens: day (number), month (word), year (number)
-    date_parts = []
-    for token in all_text:
-        if len(date_parts) == 3:
-            break
-        # Accept short numeric or month-name tokens only
-        if token.isdigit() or (token.isalpha() and len(token) <= 9):
-            date_parts.append(token)
-    date = ' '.join(date_parts)  # e.g. "04 Apr 2026"
+    # Strict date extraction using regex
+    # Matches patterns like "04 Apr 2026" or "31 Mar 2026" only
+    card_text  = first.get_text(separator=' ', strip=True)
+    date_match = re.search(
+        r'(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})',
+        card_text
+    )
+    date = date_match.group(0) if date_match else 'Date unavailable'
 
     body = get_notice_body(href)
     return title, href, date, body
