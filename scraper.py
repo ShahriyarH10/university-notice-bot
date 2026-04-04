@@ -67,10 +67,10 @@ def get_latest_notice():
         href = "https://www.aiub.edu" + href
 
     # Strict date extraction using regex
-    # Matches patterns like "04 Apr 2026" or "31 Mar 2026" only
+    # Matches "04 Apr 2026" (abbreviated) OR "04 April 2026" (full month name)
     card_text  = first.get_text(separator=' ', strip=True)
     date_match = re.search(
-        r'(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})',
+        r'(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})',
         card_text
     )
     date = date_match.group(0) if date_match else 'Date unavailable'
