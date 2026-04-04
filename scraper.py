@@ -46,12 +46,10 @@ def scrape_via_scraperapi(url: str) -> BeautifulSoup | None:
 
 
 def get_latest_notice():
-    """Return (title, link, date, body) of the most recent notice."""
     soup = scrape_via_scraperapi(NOTICE_URL)
     if not soup:
         return None, None, None, None
 
-    # Each notice card is an <a href="..."> that directly contains an <h2>
     notice_cards = [
         a for a in soup.find_all('a', href=True)
         if a.find('h2')
@@ -61,68 +59,79 @@ def get_latest_notice():
         log.warning("No notice cards found — page structure may have changed.")
         return None, None, None, None
 
-    first     = notice_cards[0]
-    title     = first.find('h2').get_text(strip=True)
-    href      = first['href']
+    first = notice_cards[0]
+    title = first.find('h2').get_text(strip=True)
+    href  = first['href']
     if not href.startswith('http'):
         href = "https://www.aiub.edu" + href
 
-    # --- Extract date from the card (day/month/year divs) ---
-    date_text = first.get_text(separator=' ', strip=True)
-    # The card text looks like: "04 Apr 2026 Seat Plan of Mid-Term…"
-    # Grab the first 3 tokens as the date
-    tokens = date_text.split()
-    date = ' '.join(tokens[:3]) if len(tokens) >= 3 else ''
+    # --- Clean date extraction ---
+    # The card contains 3 separate text nodes: day, month, year
+    # Collect all text nodes, filter to only the date parts (before the title)
+    all_text = [t.strip() for t in first.strings if t.strip()]
+    # Date is always the first 3 tokens: day (number), month (word), year (number)
+    date_parts = []
+    for token in all_text:
+        if len(date_parts) == 3:
+            break
+        # Accept short numeric or month-name tokens only
+        if token.isdigit() or (token.isalpha() and len(token) <= 9):
+            date_parts.append(token)
+    date = ' '.join(date_parts)  # e.g. "04 Apr 2026"
 
-    # --- Fetch full body from the individual notice page ---
     body = get_notice_body(href)
-
     return title, href, date, body
 
 
 def get_notice_body(url: str) -> str:
-    """Scrape the full text body from an individual notice page."""
+    """Scrape only the notice body text from an individual notice page."""
     soup = scrape_via_scraperapi(url)
     if not soup:
         return "(Could not load notice body)"
 
-    # AIUB detail pages wrap the main content in a <div> with class
-    # containing 'content', 'detail', or 'post-body' — try in order.
-    # Also works as a fallback: grab all <p> tags inside <article> or <main>
-    body = ""
+    # --- Remove all noise elements first ---
+    for tag in soup.select('nav, header, footer, script, style, .header, .footer, .navbar, .sidebar, .menu'):
+        tag.decompose()
 
-    # Strategy 1: look for a dedicated content div
-    for selector in [
-        'div.content-detail',
-        'div.post-content',
-        'div.entry-content',
-        'article',
-        'main',
-    ]:
-        container = soup.select_one(selector)
-        if container:
-            # Remove nav, header, footer noise
-            for tag in container.select('nav, header, footer, script, style'):
-                tag.decompose()
-            body = container.get_text(separator='\n', strip=True)
-            if len(body) > 100:   # only accept if it has real content
+    # --- Strategy 1: Find a <div> or <section> that contains the actual notice ---
+    # The notice body on AIUB pages sits between the title and the sidebar.
+    # It is identifiable as the first large block of <p> tags that appears
+    # AFTER the <h1> or <h2> title on the page.
+    body_paragraphs = []
+
+    title_tag = soup.find(['h1', 'h2'])
+    if title_tag:
+        # Walk siblings after the title to collect <p> content only
+        for sibling in title_tag.find_all_next():
+            tag_name = sibling.name
+
+            # Stop when we hit the sidebar notice list (date + short title pattern)
+            text = sibling.get_text(strip=True)
+            if tag_name in ['ul', 'ol'] and len(text) < 200:
+                break
+            # Stop when we hit another notice card (contains a date div pattern)
+            if tag_name == 'a' and sibling.find('h2'):
                 break
 
-    # Strategy 2: fallback — collect all <p> tags on the page
-    if len(body) < 100:
-        paragraphs = soup.find_all('p')
-        body = '\n'.join(p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True))
+            if tag_name == 'p' and text:
+                body_paragraphs.append(text)
+            elif tag_name in ['table', 'ul', 'ol'] and text:
+                # Include tables/lists as plain text (e.g. seat plans)
+                body_paragraphs.append(text)
 
-    # Clean up excessive blank lines
-    lines = [line for line in body.splitlines() if line.strip()]
-    body  = '\n'.join(lines)
+    body = '\n\n'.join(body_paragraphs)
 
-    # Truncate if too long for Telegram
+    # --- Strategy 2: fallback if nothing found ---
+    if len(body) < 50:
+        # Grab first 5 meaningful <p> tags from the whole page
+        all_p = [p.get_text(strip=True) for p in soup.find_all('p') if len(p.get_text(strip=True)) > 30]
+        body = '\n\n'.join(all_p[:5])
+
+    # --- Truncate for Telegram ---
     if len(body) > MAX_BODY_LENGTH:
-        body = body[:MAX_BODY_LENGTH].rsplit('\n', 1)[0] + "\n…(truncated)"
+        body = body[:MAX_BODY_LENGTH].rsplit('\n', 1)[0] + "\n\n_(message truncated — see full notice below)_"
 
     return body or "(No body text found)"
-
 
 def send_telegram_alert(title: str, link: str, date: str, body: str) -> bool:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
