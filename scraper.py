@@ -69,13 +69,16 @@ def get_latest_notice():
     # Strict date extraction using regex
     # Matches "04 Apr 2026" (abbreviated) OR "04 April 2026" (full month name)
     card_text  = first.get_text(separator=' ', strip=True)
-    log.info("DEBUG card_text: %r", card_text[:200])
     date_match = re.search(
         r'(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})',
         card_text
     )
-    date = date_match.group(0) if date_match else 'Date unavailable'
-
+    if date_match:
+        # Rebuild cleanly from the 3 captured groups — strips any extra whitespace
+        date = f"{date_match.group(1)} {date_match.group(2)} {date_match.group(3)}"
+    else:
+        date = 'Date unavailable'
+        
     body = get_notice_body(href)
     return title, href, date, body
 
