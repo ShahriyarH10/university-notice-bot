@@ -1,7 +1,7 @@
 import os
 import re
-import requests
 import logging
+import cloudscraper
 from bs4 import BeautifulSoup
 
 logging.basicConfig(
@@ -16,41 +16,34 @@ LAST_NOTICE_FILE = "last_notice.txt"
 
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID   = os.getenv('TELEGRAM_CHAT_ID')
-SCRAPER_API_KEY    = os.getenv('SCRAPER_API_KEY')
 
-MAX_BODY_LENGTH = 600   # Telegram message limit is 4096 chars; keep body concise
+MAX_BODY_LENGTH = 600
+
+# One shared scraper session for all requests
+scraper = cloudscraper.create_scraper(
+    browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False}
+)
 
 
-def scrape_via_scraperapi(url: str) -> BeautifulSoup | None:
-    """Fetch any AIUB page via ScraperAPI with render fallback."""
-    attempts = [
-        {'api_key': SCRAPER_API_KEY, 'url': url, 'render': 'true'},
-        {'api_key': SCRAPER_API_KEY, 'url': url, 'render': 'false'},
-    ]
-    for payload in attempts:
-        mode = payload['render']
-        try:
-            log.info("Fetching %s (render=%s)…", url, mode)
-            response = requests.get(
-                'http://api.scraperapi.com',
-                params=payload,
-                timeout=90
-            )
-            response.raise_for_status()
-            return BeautifulSoup(response.text, 'html.parser')
-        except requests.HTTPError as e:
-            log.warning("render=%s → HTTP error: %s", mode, e)
-        except requests.RequestException as e:
-            log.warning("render=%s → network error: %s", mode, e)
-    log.error("All ScraperAPI attempts failed for: %s", url)
-    return None
+def fetch_page(url: str) -> BeautifulSoup | None:
+    """Fetch any AIUB page using cloudscraper (bypasses Cloudflare for free)."""
+    try:
+        log.info("Fetching %s…", url)
+        response = scraper.get(url, timeout=30)
+        response.raise_for_status()
+        return BeautifulSoup(response.text, 'html.parser')
+    except Exception as e:
+        log.error("Failed to fetch %s: %s", url, e)
+        return None
 
 
 def get_latest_notice():
-    soup = scrape_via_scraperapi(NOTICE_URL)
+    """Return (title, link, date, body) of the most recent notice."""
+    soup = fetch_page(NOTICE_URL)
     if not soup:
         return None, None, None, None
 
+    # Each notice card is an <a href="..."> that directly contains an <h2>
     notice_cards = [
         a for a in soup.find_all('a', href=True)
         if a.find('h2')
@@ -66,72 +59,66 @@ def get_latest_notice():
     if not href.startswith('http'):
         href = "https://www.aiub.edu" + href
 
-    # Strict date extraction using regex
-    # Matches "04 Apr 2026" (abbreviated) OR "04 April 2026" (full month name)
+    # Strict date extraction — handles both "Apr" and "April" format
     card_text  = first.get_text(separator=' ', strip=True)
+    log.info("DEBUG card_text: %r", card_text[:300])
     date_match = re.search(
-        r'(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})',
+        r'(\d{1,2})\s+(January|February|March|April|May|June|July|August'
+        r'|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun'
+        r'|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})',
         card_text
     )
     if date_match:
-        # Rebuild cleanly from the 3 captured groups — strips any extra whitespace
         date = f"{date_match.group(1)} {date_match.group(2)} {date_match.group(3)}"
     else:
         date = 'Date unavailable'
-        
+
     body = get_notice_body(href)
     return title, href, date, body
 
 
 def get_notice_body(url: str) -> str:
     """Scrape only the notice body text from an individual notice page."""
-    soup = scrape_via_scraperapi(url)
+    soup = fetch_page(url)
     if not soup:
         return "(Could not load notice body)"
 
-    # --- Remove all noise elements first ---
+    # Remove all noise elements
     for tag in soup.select('nav, header, footer, script, style, .header, .footer, .navbar, .sidebar, .menu'):
         tag.decompose()
 
-    # --- Strategy 1: Find a <div> or <section> that contains the actual notice ---
-    # The notice body on AIUB pages sits between the title and the sidebar.
-    # It is identifiable as the first large block of <p> tags that appears
-    # AFTER the <h1> or <h2> title on the page.
+    # Walk siblings after the <h1>/<h2> title, stop before sidebar content
     body_paragraphs = []
-
     title_tag = soup.find(['h1', 'h2'])
     if title_tag:
-        # Walk siblings after the title to collect <p> content only
         for sibling in title_tag.find_all_next():
             tag_name = sibling.name
+            text     = sibling.get_text(strip=True)
 
-            # Stop when we hit the sidebar notice list (date + short title pattern)
-            text = sibling.get_text(strip=True)
-            if tag_name in ['ul', 'ol'] and len(text) < 200:
-                break
-            # Stop when we hit another notice card (contains a date div pattern)
+            # Stop when we hit another notice card (sidebar)
             if tag_name == 'a' and sibling.find('h2'):
+                break
+            if tag_name in ['ul', 'ol'] and len(text) < 200:
                 break
 
             if tag_name == 'p' and text:
                 body_paragraphs.append(text)
             elif tag_name in ['table', 'ul', 'ol'] and text:
-                # Include tables/lists as plain text (e.g. seat plans)
                 body_paragraphs.append(text)
 
     body = '\n\n'.join(body_paragraphs)
 
-    # --- Strategy 2: fallback if nothing found ---
+    # Fallback — grab first 5 meaningful <p> tags
     if len(body) < 50:
-        # Grab first 5 meaningful <p> tags from the whole page
         all_p = [p.get_text(strip=True) for p in soup.find_all('p') if len(p.get_text(strip=True)) > 30]
-        body = '\n\n'.join(all_p[:5])
+        body  = '\n\n'.join(all_p[:5])
 
-    # --- Truncate for Telegram ---
+    # Truncate for Telegram
     if len(body) > MAX_BODY_LENGTH:
-        body = body[:MAX_BODY_LENGTH].rsplit('\n', 1)[0] + "\n\n_(message truncated — see full notice below)_"
+        body = body[:MAX_BODY_LENGTH].rsplit('\n', 1)[0] + "\n\n_(truncated — see full notice below)_"
 
     return body or "(No body text found)"
+
 
 def send_telegram_alert(title: str, link: str, date: str, body: str) -> bool:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -146,11 +133,11 @@ def send_telegram_alert(title: str, link: str, date: str, body: str) -> bool:
         f"🔗 [Read full notice]({link})"
     )
 
-    # Telegram max message length is 4096 chars
     if len(message) > 4096:
-        message = message[:4050] + "…\n\n🔗 [Read full notice](" + link + ")"
+        message = message[:4050] + f"…\n\n🔗 [Read full notice]({link})"
 
     try:
+        import requests
         resp = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
             data={
@@ -168,7 +155,7 @@ def send_telegram_alert(title: str, link: str, date: str, body: str) -> bool:
             return False
         log.info("Telegram alert sent.")
         return True
-    except requests.RequestException as e:
+    except Exception as e:
         log.error("Telegram request failed: %s", e)
         return False
 
