@@ -45,8 +45,8 @@ jobs:
         run: |
           git config --global user.name  "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet last_notice.txt; then
-            git add last_notice.txt
+          if ! git diff --quiet last_notices.json; then
+            git add last_notices.json
             git commit -m "chore: update notice state [skip ci]"
             git push
           else
