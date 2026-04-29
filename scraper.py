@@ -1,6 +1,8 @@
 import os
 import re
+import json
 import logging
+import requests
 import cloudscraper
 from bs4 import BeautifulSoup
 
@@ -12,21 +14,19 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 NOTICE_URL       = "https://www.aiub.edu/category/notices"
-LAST_NOTICE_FILE = "last_notice.txt"
+LAST_NOTICE_FILE = "last_notices.json"  # changed from .txt to .json
 
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID   = os.getenv('TELEGRAM_CHAT_ID')
 
 MAX_BODY_LENGTH = 600
 
-# One shared scraper session for all requests
 scraper = cloudscraper.create_scraper(
     browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False}
 )
 
 
 def fetch_page(url: str) -> BeautifulSoup | None:
-    """Fetch any AIUB page using cloudscraper (bypasses Cloudflare for free)."""
     try:
         log.info("Fetching %s…", url)
         response = scraper.get(url, timeout=30)
@@ -37,13 +37,12 @@ def fetch_page(url: str) -> BeautifulSoup | None:
         return None
 
 
-def get_latest_notice():
-    """Return (title, link, date, body) of the most recent notice."""
+def get_all_notices() -> list:
+    """Return a list of (title, href, date) for ALL notices on the page."""
     soup = fetch_page(NOTICE_URL)
     if not soup:
-        return None, None, None, None
+        return []
 
-    # Each notice card is an <a href="..."> that directly contains an <h2>
     notice_cards = [
         a for a in soup.find_all('a', href=True)
         if a.find('h2')
@@ -51,43 +50,38 @@ def get_latest_notice():
 
     if not notice_cards:
         log.warning("No notice cards found — page structure may have changed.")
-        return None, None, None, None
+        return []
 
-    first = notice_cards[0]
-    title = first.find('h2').get_text(strip=True)
-    href  = first['href']
-    if not href.startswith('http'):
-        href = "https://www.aiub.edu" + href
+    notices = []
+    for card in notice_cards:
+        title = card.find('h2').get_text(strip=True)
+        href  = card['href']
+        if not href.startswith('http'):
+            href = "https://www.aiub.edu" + href
 
-    # Strict date extraction — handles both "Apr" and "April" format
-    card_text  = first.get_text(separator=' ', strip=True)
-    log.info("DEBUG card_text: %r", card_text[:300])
-    date_match = re.search(
-        r'(\d{1,2})\s+(January|February|March|April|May|June|July|August'
-        r'|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun'
-        r'|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})',
-        card_text
-    )
-    if date_match:
-        date = f"{date_match.group(1)} {date_match.group(2)} {date_match.group(3)}"
-    else:
-        date = 'Date unavailable'
+        card_text  = card.get_text(separator=' ', strip=True)
+        date_match = re.search(
+            r'(\d{1,2})\s+(January|February|March|April|May|June|July|August'
+            r'|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun'
+            r'|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})',
+            card_text
+        )
+        date = f"{date_match.group(1)} {date_match.group(2)} {date_match.group(3)}" if date_match else 'Date unavailable'
 
-    body = get_notice_body(href)
-    return title, href, date, body
+        notices.append({'title': title, 'href': href, 'date': date})
+
+    log.info("Found %d notices on page.", len(notices))
+    return notices
 
 
 def get_notice_body(url: str) -> str:
-    """Scrape only the notice body text from an individual notice page."""
     soup = fetch_page(url)
     if not soup:
         return "(Could not load notice body)"
 
-    # Remove all noise elements
     for tag in soup.select('nav, header, footer, script, style, .header, .footer, .navbar, .sidebar, .menu'):
         tag.decompose()
 
-    # Walk siblings after the <h1>/<h2> title, stop before sidebar content
     body_paragraphs = []
     title_tag = soup.find(['h1', 'h2'])
     if title_tag:
@@ -95,7 +89,6 @@ def get_notice_body(url: str) -> str:
             tag_name = sibling.name
             text     = sibling.get_text(strip=True)
 
-            # Stop when we hit another notice card (sidebar)
             if tag_name == 'a' and sibling.find('h2'):
                 break
             if tag_name in ['ul', 'ol'] and len(text) < 200:
@@ -108,12 +101,10 @@ def get_notice_body(url: str) -> str:
 
     body = '\n\n'.join(body_paragraphs)
 
-    # Fallback — grab first 5 meaningful <p> tags
     if len(body) < 50:
         all_p = [p.get_text(strip=True) for p in soup.find_all('p') if len(p.get_text(strip=True)) > 30]
         body  = '\n\n'.join(all_p[:5])
 
-    # Truncate for Telegram
     if len(body) > MAX_BODY_LENGTH:
         body = body[:MAX_BODY_LENGTH].rsplit('\n', 1)[0] + "\n\n_(truncated — see full notice below)_"
 
@@ -137,7 +128,6 @@ def send_telegram_alert(title: str, link: str, date: str, body: str) -> bool:
         message = message[:4050] + f"…\n\n🔗 [Read full notice]({link})"
 
     try:
-        import requests
         resp = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
             data={
@@ -153,40 +143,55 @@ def send_telegram_alert(title: str, link: str, date: str, body: str) -> bool:
         if not result.get("ok"):
             log.error("Telegram rejected message: %s", result)
             return False
-        log.info("Telegram alert sent.")
+        log.info("Telegram alert sent for: %s", title)
         return True
     except Exception as e:
         log.error("Telegram request failed: %s", e)
         return False
 
 
-def load_last_notice() -> str:
+def load_seen_notices() -> set:
+    """Load the set of already-sent notice URLs from disk."""
     if os.path.exists(LAST_NOTICE_FILE):
         with open(LAST_NOTICE_FILE, "r", encoding="utf-8") as f:
-            return f.read().strip()
-    return ""
+            try:
+                return set(json.load(f))
+            except json.JSONDecodeError:
+                return set()
+    return set()
 
 
-def save_last_notice(title: str) -> None:
+def save_seen_notices(seen: set) -> None:
+    """Persist the set of sent notice URLs to disk."""
     with open(LAST_NOTICE_FILE, "w", encoding="utf-8") as f:
-        f.write(title)
+        json.dump(list(seen), f, indent=2)
 
 
 def main():
     log.info("Checking for new AIUB notices…")
 
-    title, link, date, body = get_latest_notice()
-
-    if not title:
+    all_notices = get_all_notices()
+    if not all_notices:
         log.warning("Could not retrieve notices. Exiting.")
         return
 
-    if title != load_last_notice():
-        log.info("New notice: %s", title)
-        if send_telegram_alert(title, link, date, body):
-            save_last_notice(title)
-    else:
+    seen = load_seen_notices()
+    new_notices = [n for n in all_notices if n['href'] not in seen]
+
+    if not new_notices:
         log.info("No new notices. Standing by.")
+        return
+
+    # Send oldest first so they appear in chronological order in Telegram
+    for notice in reversed(new_notices):
+        log.info("New notice found: %s", notice['title'])
+        body = get_notice_body(notice['href'])
+        sent = send_telegram_alert(notice['title'], notice['href'], notice['date'], body)
+        if sent:
+            seen.add(notice['href'])
+            save_seen_notices(seen)  # save after each successful send
+
+    log.info("Done. %d new notice(s) sent.", len(new_notices))
 
 
 if __name__ == "__main__":
