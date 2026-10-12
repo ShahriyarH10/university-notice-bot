@@ -12,7 +12,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 LISTING = (FIXTURES / "listing.html").read_text(encoding="utf-8")
 DETAIL = (FIXTURES / "detail.html").read_text(encoding="utf-8")
 
-NOW = "16:14:33"
+NOW = "2026-10-12 16:14:33"
 URL_1 = "https://www.aiub.edu/general-notice-regarding-web-groups"
 URL_2 = "https://www.aiub.edu/admission-result_[slot-1]"
 URL_3 = "https://www.aiub.edu/no-date-notice"
