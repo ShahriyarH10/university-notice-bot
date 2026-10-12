@@ -3,9 +3,9 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import datetime
 
-from notice_bot.config import Settings
+from notice_bot.config import LOCAL_TZ, Settings
 from notice_bot.http import FetchError
 from notice_bot.models import Notice
 from notice_bot.parser import parse_notice_detail, parse_notice_list
@@ -101,7 +101,8 @@ def _alnum(text: str) -> str:
 
 
 def _now() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    """Current local time as ISO 8601 with offset, e.g. 2026-10-12T16:14:33+06:00."""
+    return datetime.now(LOCAL_TZ).isoformat(timespec="seconds")
 
 
 def _prepare(notice: Notice, fetch: Fetch, settings: Settings) -> tuple[Notice, OutgoingMessage]:

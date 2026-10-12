@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import timedelta, timezone
 from pathlib import Path
 
 BASE_URL = "https://www.aiub.edu"
 NOTICE_URL = f"{BASE_URL}/category/notices"
 DEFAULT_STATE_FILE = Path("last_notices.json")
+# Bangladesh Standard Time (UTC+6). It has no daylight saving, so a fixed offset is exact.
+LOCAL_TZ = timezone(timedelta(hours=6), "BST")
 
 
 @dataclass(frozen=True)

@@ -19,12 +19,17 @@ def test_missing_file_reports_not_existing(tmp_path):
 
 def test_round_trip_preserves_order_and_details(tmp_path):
     store = make_store(tmp_path)
-    store.add("https://a", title="A", date="1 Oct 2026", seen_at="2026-10-12T10:14:33Z")
+    store.add("https://a", title="A", date="1 Oct 2026", seen_at="2026-10-12T16:14:33+06:00")
     store.add("https://b")
     store.save()
 
     assert json.loads(store.path.read_text()) == [
-        {"url": "https://a", "title": "A", "date": "1 Oct 2026", "seen_at": "2026-10-12T10:14:33Z"},
+        {
+            "url": "https://a",
+            "title": "A",
+            "date": "1 Oct 2026",
+            "seen_at": "2026-10-12T16:14:33+06:00",
+        },
         {"url": "https://b"},
     ]
     reloaded = make_store(tmp_path)
@@ -46,13 +51,13 @@ def test_old_format_of_bare_urls_is_read_and_upgraded(tmp_path):
     path.write_text('["https://old1", "https://old2"]')
     store = SeenStore(path)
     store.load()
-    store.add("https://new", title="New", seen_at="2026-10-12T10:14:33Z")
+    store.add("https://new", title="New", seen_at="2026-10-12T16:14:33+06:00")
     store.save()
 
     assert json.loads(path.read_text()) == [
         {"url": "https://old1"},
         {"url": "https://old2"},
-        {"url": "https://new", "title": "New", "seen_at": "2026-10-12T10:14:33Z"},
+        {"url": "https://new", "title": "New", "seen_at": "2026-10-12T16:14:33+06:00"},
     ]
 
 

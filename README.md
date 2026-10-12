@@ -37,11 +37,11 @@ Adding Dropping for Fall 2026-27
   "url": "https://www.aiub.edu/adding-dropping-for-fall-2026-27",
   "title": "Adding Dropping for Fall 2026-27",
   "date": "27 Sep 2026",
-  "seen_at": "2026-10-12T10:14:33Z"
+  "seen_at": "2026-10-12T16:14:33+06:00"
 }
 ```
 
-`date` is the date shown on the notice board; `seen_at` is when the bot sent it (UTC). Entries from
+`date` is the date shown on the notice board; `seen_at` is when the bot sent it, in Bangladesh time (UTC+6). Entries from
 before this was added are bare `{"url": …}` objects (or plain URL strings, which are still read).
 
 Behaviour worth knowing:
