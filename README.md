@@ -30,6 +30,20 @@ Adding Dropping for Fall 2026-27
 3. For each new notice, oldest first, fetch its page for the full title and body and send it to Telegram.
 4. Record each delivered notice in `last_notices.json`. The workflow commits that file back to the repo, which is how the bot remembers state between runs.
 
+`last_notices.json` records each notice the bot has handled:
+
+```json
+{
+  "url": "https://www.aiub.edu/adding-dropping-for-fall-2026-27",
+  "title": "Adding Dropping for Fall 2026-27",
+  "date": "27 Sep 2026",
+  "seen_at": "2026-10-12T10:14:33Z"
+}
+```
+
+`date` is the date shown on the notice board; `seen_at` is when the bot sent it (UTC). Entries from
+before this was added are bare `{"url": …}` objects (or plain URL strings, which are still read).
+
 Behaviour worth knowing:
 
 - **First run is silent.** If `last_notices.json` doesn't exist, the bot records what is on the board without sending anything, so you don't get dozens of old notices.

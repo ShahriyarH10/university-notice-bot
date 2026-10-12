@@ -12,9 +12,15 @@ FIXTURES = Path(__file__).parent / "fixtures"
 LISTING = (FIXTURES / "listing.html").read_text(encoding="utf-8")
 DETAIL = (FIXTURES / "detail.html").read_text(encoding="utf-8")
 
+NOW = "2026-10-12T10:14:33Z"
 URL_1 = "https://www.aiub.edu/general-notice-regarding-web-groups"
 URL_2 = "https://www.aiub.edu/admission-result_[slot-1]"
 URL_3 = "https://www.aiub.edu/no-date-notice"
+
+
+@pytest.fixture(autouse=True)
+def fixed_clock(monkeypatch):
+    monkeypatch.setattr("notice_bot.app._now", lambda: NOW)
 
 
 @pytest.fixture
@@ -46,8 +52,12 @@ class Outbox:
         self.messages.append(message.text)
 
 
-def saved(settings):
+def saved_entries(settings):
     return json.loads(settings.state_file.read_text())
+
+
+def saved(settings):
+    return [e if isinstance(e, str) else e["url"] for e in saved_entries(settings)]
 
 
 def test_first_run_records_board_without_sending(settings):
@@ -127,3 +137,25 @@ def test_dry_run_prints_and_leaves_state_untouched(settings, capsys):
 def test_dry_run_first_run_does_not_create_state(settings):
     run(settings, fetch=Site(), send=Outbox(), dry_run=True)
     assert not settings.state_file.exists()
+
+
+def test_state_records_title_board_date_and_time_seen(settings):
+    settings.state_file.write_text(json.dumps([URL_2, URL_3]))
+    run(settings, fetch=Site(), send=Outbox())
+    # The full title from the notice page is stored, not the truncated one.
+    assert saved_entries(settings)[-1] == {
+        "url": URL_1,
+        "title": "General Notice (regarding usage of web groups/ blogs/ social media)",
+        "date": "12 Oct 2026",
+        "seen_at": NOW,
+    }
+
+
+def test_first_run_records_details_too(settings):
+    run(settings, fetch=Site(), send=Outbox())
+    assert saved_entries(settings)[1] == {
+        "url": URL_2,
+        "title": "Result & Viva: *Slot_1*",
+        "date": "5 September 2026",
+        "seen_at": NOW,
+    }

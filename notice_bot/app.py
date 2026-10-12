@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import replace
+from datetime import UTC, datetime
 
 from notice_bot.config import Settings
 from notice_bot.http import FetchError
@@ -45,8 +46,9 @@ def run(settings: Settings, *, fetch: Fetch, send: Send, dry_run: bool = False) 
         # First run: record the current board instead of flooding the chat
         # with every notice that is already there.
         log.info("No state file yet; recording %d existing notices without sending.", len(notices))
+        seen_at = _now()
         for notice in notices:
-            store.add(notice.url)
+            store.add(notice.url, title=notice.title, date=notice.date, seen_at=seen_at)
         if not dry_run:
             store.save()
         return EXIT_OK
@@ -61,7 +63,7 @@ def run(settings: Settings, *, fetch: Fetch, send: Send, dry_run: bool = False) 
     # Oldest first, so they arrive in chronological order.
     for notice in reversed(new_notices):
         log.info("New notice: %s", notice.title)
-        message = _build_message(notice, fetch, settings)
+        notice, message = _prepare(notice, fetch, settings)
         if dry_run:
             print("--- dry run: would send ---")
             print(f"{message.text}\n[{message.button_label}] {message.button_url}\n")
@@ -72,7 +74,7 @@ def run(settings: Settings, *, fetch: Fetch, send: Send, dry_run: bool = False) 
             failures += 1
             log.error("Could not send %r: %s", notice.title, exc)
             continue  # not marked as seen, so the next run retries it
-        store.add(notice.url)
+        store.add(notice.url, title=notice.title, date=notice.date, seen_at=_now())
         store.save()  # persist per notice so a crash can't cause duplicates
 
     if dry_run:
@@ -98,7 +100,13 @@ def _alnum(text: str) -> str:
     return "".join(ch for ch in text.casefold() if ch.isalnum())
 
 
-def _build_message(notice: Notice, fetch: Fetch, settings: Settings) -> OutgoingMessage:
+def _now() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _prepare(notice: Notice, fetch: Fetch, settings: Settings) -> tuple[Notice, OutgoingMessage]:
+    """Fetch the notice page; return the notice (with its full title, if the
+    listing truncated it) and the message to send."""
     body = ""
     try:
         detail = parse_notice_detail(fetch(notice.url))
@@ -109,4 +117,4 @@ def _build_message(notice: Notice, fetch: Fetch, settings: Settings) -> Outgoing
         # The listing truncates long titles with "..."; prefer the full one.
         if detail.title and _is_truncation_of(notice.title, detail.title):
             notice = replace(notice, title=detail.title)
-    return format_message(notice, body, max_body_length=settings.max_body_length)
+    return notice, format_message(notice, body, max_body_length=settings.max_body_length)
