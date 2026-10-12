@@ -22,8 +22,8 @@ class SeenEntry:
     title: str | None = None
     # The date shown on the notice board.
     date: str | None = None
-    # When the bot sent (or, on a first run, recorded) the notice, as local
-    # ISO 8601 time with its UTC offset.
+    # Local time of day (HH:MM:SS) when the bot sent, or on a first run
+    # recorded, the notice.
     seen_at: str | None = None
 
 

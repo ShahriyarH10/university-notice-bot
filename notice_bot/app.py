@@ -101,8 +101,8 @@ def _alnum(text: str) -> str:
 
 
 def _now() -> str:
-    """Current local time as ISO 8601 with offset, e.g. 2026-10-12T16:14:33+06:00."""
-    return datetime.now(LOCAL_TZ).isoformat(timespec="seconds")
+    """Current local (UTC+6) time of day, e.g. 16:14:33."""
+    return datetime.now(LOCAL_TZ).strftime("%H:%M:%S")
 
 
 def _prepare(notice: Notice, fetch: Fetch, settings: Settings) -> tuple[Notice, OutgoingMessage]:
