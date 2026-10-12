@@ -9,12 +9,12 @@ from notice_bot.http import FetchError
 from notice_bot.models import Notice
 from notice_bot.parser import parse_notice_detail, parse_notice_list
 from notice_bot.state import SeenStore
-from notice_bot.telegram import TelegramError, format_message
+from notice_bot.telegram import OutgoingMessage, TelegramError, format_message
 
 log = logging.getLogger(__name__)
 
 Fetch = Callable[[str], str]
-Send = Callable[[str], None]
+Send = Callable[[OutgoingMessage], None]
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -63,7 +63,8 @@ def run(settings: Settings, *, fetch: Fetch, send: Send, dry_run: bool = False) 
         log.info("New notice: %s", notice.title)
         message = _build_message(notice, fetch, settings)
         if dry_run:
-            print(f"--- dry run: would send ---\n{message}\n")
+            print("--- dry run: would send ---")
+            print(f"{message.text}\n[{message.button_label}] {message.button_url}\n")
             continue
         try:
             send(message)
@@ -97,7 +98,7 @@ def _alnum(text: str) -> str:
     return "".join(ch for ch in text.casefold() if ch.isalnum())
 
 
-def _build_message(notice: Notice, fetch: Fetch, settings: Settings) -> str:
+def _build_message(notice: Notice, fetch: Fetch, settings: Settings) -> OutgoingMessage:
     body = ""
     try:
         detail = parse_notice_detail(fetch(notice.url))

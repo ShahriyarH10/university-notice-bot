@@ -1,21 +1,36 @@
 from __future__ import annotations
 
 import html
+import json
 import logging
 import time
+from dataclasses import dataclass
+from urllib.parse import quote
 
 import requests
 
+from notice_bot.categories import categorize
 from notice_bot.models import Notice
+from notice_bot.parser import DATE_UNAVAILABLE
 
 log = logging.getLogger(__name__)
 
 MESSAGE_LIMIT = 4096
 _MAX_RATE_LIMIT_WAIT = 60
+_URL_SAFE = ":/?&=#%@+,;~!$'()*-._"
 
 
 class TelegramError(RuntimeError):
     """Telegram refused or failed to deliver a message."""
+
+
+@dataclass(frozen=True)
+class OutgoingMessage:
+    """A message plus the link shown as a button underneath it."""
+
+    text: str
+    button_url: str
+    button_label: str = "🔗 Read full notice"
 
 
 def shorten(text: str, limit: int) -> str:
@@ -32,29 +47,39 @@ def shorten(text: str, limit: int) -> str:
     return cut.rstrip() + "…"
 
 
-def format_message(notice: Notice, body: str, *, max_body_length: int = 600) -> str:
-    """Build the HTML message for a notice.
+def format_message(notice: Notice, body: str, *, max_body_length: int = 600) -> OutgoingMessage:
+    """Build the message for a notice.
+
+    Layout::
+
+        🎓 Admission · 📅 23 Sep 2026
+
+        Notice title in bold
+
+        ▎ excerpt, collapsed after a few lines
+        [ 🔗 Read full notice ]
 
     HTML mode with escaping is used because notice titles routinely contain
     characters (`_`, `*`, `[`) that make Telegram's Markdown modes reject the
-    whole message. The body is shortened *before* formatting so the closing
-    link can never be cut in half.
+    whole message. The link is a button rather than part of the text, so
+    shortening the body can never cut it in half.
     """
-    parts = [
-        "🔔 <b>New AIUB Notice</b>",
-        f"📅 {html.escape(notice.date)}",
-        "",
-        f"📋 <b>{html.escape(notice.title)}</b>",
-    ]
-    if body:
-        excerpt = shorten(body, max_body_length)
-        parts += ["", html.escape(excerpt)]
-    parts += ["", f'🔗 <a href="{html.escape(notice.url, quote=True)}">Read full notice</a>']
+    category = categorize(notice.title)
+    meta = f"{category.emoji} <b>{html.escape(category.label)}</b>"
+    if notice.date != DATE_UNAVAILABLE:
+        meta += f"  ·  📅 {html.escape(notice.date)}"
 
-    message = "\n".join(parts)
-    if len(message) > MESSAGE_LIMIT:  # only possible with an absurdly long title
-        raise TelegramError(f"message of {len(message)} characters exceeds Telegram's limit")
-    return message
+    parts = [meta, "", f"<b>{html.escape(notice.title)}</b>"]
+    if body:
+        excerpt = html.escape(shorten(body, max_body_length))
+        parts += ["", f"<blockquote expandable>{excerpt}</blockquote>"]
+
+    text = "\n".join(parts)
+    if len(text) > MESSAGE_LIMIT:  # only possible with an absurdly long title
+        raise TelegramError(f"message of {len(text)} characters exceeds Telegram's limit")
+    # Telegram rejects the whole message if a button URL contains characters
+    # it considers invalid (brackets, spaces), so encode anything unsafe.
+    return OutgoingMessage(text=text, button_url=quote(notice.url, safe=_URL_SAFE))
 
 
 class TelegramClient:
@@ -73,10 +98,19 @@ class TelegramClient:
         self._timeout = timeout
         self._max_attempts = max_attempts
 
-    def send_message(self, text: str) -> None:
-        """Send an HTML-formatted message, waiting out Telegram rate limits."""
+    def send_message(self, message: OutgoingMessage) -> None:
+        """Send a message, waiting out Telegram rate limits."""
         url = f"https://api.telegram.org/bot{self._token}/sendMessage"
-        payload = {"chat_id": self._chat_id, "text": text, "parse_mode": "HTML"}
+        payload = {
+            "chat_id": self._chat_id,
+            "text": message.text,
+            "parse_mode": "HTML",
+            # The site's link preview card just repeats the title.
+            "link_preview_options": json.dumps({"is_disabled": True}),
+            "reply_markup": json.dumps(
+                {"inline_keyboard": [[{"text": message.button_label, "url": message.button_url}]]}
+            ),
+        }
 
         for attempt in range(1, self._max_attempts + 1):
             try:

@@ -53,7 +53,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     session = create_session()
     fetch = partial(fetch_html, session, timeout=settings.request_timeout)
     if args.dry_run:
-        send = print
+        send = print  # never called: run() prints dry-run output itself
     else:
         assert settings.telegram_token and settings.telegram_chat_id
         send = TelegramClient(settings.telegram_token, settings.telegram_chat_id).send_message

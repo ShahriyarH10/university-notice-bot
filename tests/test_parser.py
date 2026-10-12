@@ -63,6 +63,15 @@ class TestParseNoticeDetail:
         assert body.count("Nested paragraph") == 1
         assert "Cell two" in body
 
+    def test_table_rows_become_pipe_separated_lines(self):
+        html = (
+            "<h1>Load</h1><p>Minimum credits after dropping, as per the table.</p>"
+            "<table><tr><th>Program</th><th>Credits</th></tr>"
+            "<tr><td>Undergraduate</td><td>12</td></tr></table>"
+        )
+        body = parse_notice_detail(html).body
+        assert body.endswith("Program | Credits\nUndergraduate | 12")
+
     def test_body_stops_at_related_notice_cards(self):
         body = parse_notice_detail(read("detail.html")).body
         assert "more notices" not in body

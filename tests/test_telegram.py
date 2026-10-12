@@ -1,9 +1,13 @@
+import json
+
 import pytest
 import requests
 
 from notice_bot.models import Notice
+from notice_bot.parser import DATE_UNAVAILABLE
 from notice_bot.telegram import (
     MESSAGE_LIMIT,
+    OutgoingMessage,
     TelegramClient,
     TelegramError,
     format_message,
@@ -34,21 +38,42 @@ class TestShorten:
 
 
 class TestFormatMessage:
+    def test_layout_has_category_date_bold_title_and_collapsible_excerpt(self):
+        notice = Notice(
+            title="Admission Test Final Result", url="https://www.aiub.edu/a", date="12 Oct 2026"
+        )
+        message = format_message(notice, "Details here")
+        assert message.text == (
+            "🎓 <b>Admission</b>  ·  📅 12 Oct 2026\n"
+            "\n"
+            "<b>Admission Test Final Result</b>\n"
+            "\n"
+            "<blockquote expandable>Details here</blockquote>"
+        )
+        assert message.button_url == "https://www.aiub.edu/a"
+
     def test_escapes_html_in_every_field(self):
         message = format_message(NOTICE, "1 < 2 & 3 > 2")
-        assert "Result &amp; Viva: *Slot_1* [x]" in message
-        assert "1 &lt; 2 &amp; 3 &gt; 2" in message
-        assert 'href="https://www.aiub.edu/a?b=1&amp;c=2"' in message
+        assert "Result &amp; Viva: *Slot_1* [x]" in message.text
+        assert "1 &lt; 2 &amp; 3 &gt; 2" in message.text
+
+    def test_unknown_date_is_left_out(self):
+        notice = Notice(title="Plain", url="https://x", date=DATE_UNAVAILABLE)
+        assert "📅" not in format_message(notice, "").text
 
     def test_body_is_optional(self):
-        message = format_message(NOTICE, "")
-        assert message.count("\n\n") == 2  # header/title and title/link only
+        assert "blockquote" not in format_message(NOTICE, "").text
 
-    def test_long_body_is_shortened_and_link_survives(self):
+    def test_unsafe_url_characters_are_encoded_for_the_button(self):
+        notice = Notice(title="t", url="https://www.aiub.edu/a b_[slot-1]?x=1&y=2", date="d")
+        assert format_message(notice, "").button_url == (
+            "https://www.aiub.edu/a%20b_%5Bslot-1%5D?x=1&y=2"
+        )
+
+    def test_long_body_is_shortened(self):
         message = format_message(NOTICE, "word " * 2000, max_body_length=600)
-        assert len(message) < MESSAGE_LIMIT
-        assert message.endswith("Read full notice</a>")
-        assert "…" in message
+        assert len(message.text) < MESSAGE_LIMIT
+        assert "…</blockquote>" in message.text
 
     def test_oversized_message_is_rejected(self):
         huge = Notice(title="t" * 5000, url="https://x", date="d")
@@ -85,6 +110,9 @@ class FakeSession:
         return item
 
 
+HI = OutgoingMessage(text="hi", button_url="https://x")
+
+
 def client(session, **kwargs):
     return TelegramClient("SECRET-TOKEN", "42", session=session, **kwargs)
 
@@ -92,20 +120,26 @@ def client(session, **kwargs):
 class TestSendMessage:
     def test_posts_html_message(self):
         session = FakeSession(FakeResponse(200, {"ok": True}))
-        client(session).send_message("hi")
+        client(session).send_message(HI)
         url, data = session.calls[0]
         assert url == "https://api.telegram.org/botSECRET-TOKEN/sendMessage"
-        assert data == {"chat_id": "42", "text": "hi", "parse_mode": "HTML"}
+        assert data["chat_id"] == "42"
+        assert data["text"] == "hi"
+        assert data["parse_mode"] == "HTML"
+        assert json.loads(data["link_preview_options"]) == {"is_disabled": True}
+        assert json.loads(data["reply_markup"]) == {
+            "inline_keyboard": [[{"text": "🔗 Read full notice", "url": "https://x"}]]
+        }
 
     def test_api_rejection_raises_with_description(self):
         session = FakeSession(FakeResponse(400, {"ok": False, "description": "Bad Request: nope"}))
         with pytest.raises(TelegramError, match="nope"):
-            client(session).send_message("hi")
+            client(session).send_message(HI)
 
     def test_non_json_error_response_raises(self):
         session = FakeSession(FakeResponse(502, json_error=True))
         with pytest.raises(TelegramError, match="HTTP 502"):
-            client(session).send_message("hi")
+            client(session).send_message(HI)
 
     def test_rate_limit_is_retried(self, monkeypatch):
         sleeps = []
@@ -114,7 +148,7 @@ class TestSendMessage:
             FakeResponse(429, {"ok": False, "parameters": {"retry_after": 3}}),
             FakeResponse(200, {"ok": True}),
         )
-        client(session).send_message("hi")
+        client(session).send_message(HI)
         assert sleeps == [3]
         assert len(session.calls) == 2
 
@@ -127,13 +161,13 @@ class TestSendMessage:
         }
         session = FakeSession(*(FakeResponse(429, limited) for _ in range(3)))
         with pytest.raises(TelegramError, match="Too Many Requests"):
-            client(session, max_attempts=3).send_message("hi")
+            client(session, max_attempts=3).send_message(HI)
 
     def test_token_is_redacted_from_network_errors(self):
         error = requests.ConnectionError(
             "failed for https://api.telegram.org/botSECRET-TOKEN/sendMessage"
         )
         with pytest.raises(TelegramError) as info:
-            client(FakeSession(error)).send_message("hi")
+            client(FakeSession(error)).send_message(HI)
         assert "SECRET-TOKEN" not in str(info.value)
         assert "***" in str(info.value)

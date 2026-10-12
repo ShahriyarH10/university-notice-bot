@@ -6,16 +6,22 @@ A Telegram bot that watches the [AIUB notice board](https://www.aiub.edu/categor
 sends every new notice to a chat, with the date, the full title, a short excerpt and a link.
 It runs hourly on GitHub Actions, so there is no server to host.
 
+Each message looks like this:
+
 ```
-🔔 New AIUB Notice
-📅 27 Sep 2026
+🗂️ Registration  ·  📅 27 Sep 2026
 
-📋 Adding Dropping for Fall 2026-27
+Adding Dropping for Fall 2026-27
 
-ADDING & DROPPING …
+▎ ADDING & DROPPING
+▎ [NO SECTION CHANGING]
+▎ Date: Thursday, October 1 and Sunday, October 4, 2026. …      (tap to expand)
 
-🔗 Read full notice
+[ 🔗 Read full notice ]
 ```
+
+- A **category tag** is guessed from the title: 🎓 Admission, 📝 Exams, 💰 Scholarship & Aid, 💳 Payments, 🗂️ Registration, 💼 Internship & Thesis, 🏖️ Holiday, 🏆 Events, 🛠️ System, or 📢 General. The rules live in `notice_bot/categories.py`.
+- The excerpt is a **collapsible quote**, and the link is a **button**, so messages stay compact.
 
 ## How it works
 
@@ -78,7 +84,8 @@ notice_bot/
   app.py        one check cycle: fetch → diff → send → record
   parser.py     HTML → data (pure functions, no network)
   http.py       Cloudflare-aware session with retries
-  telegram.py   message formatting and the Telegram API client
+  telegram.py   message layout and the Telegram API client
+  categories.py title → category tag (emoji + label)
   state.py      the "already sent" store (atomic JSON file)
   config.py     settings
 tests/          pytest suite, with HTML fixtures modelled on the real pages

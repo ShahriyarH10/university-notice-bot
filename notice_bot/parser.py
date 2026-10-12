@@ -67,7 +67,7 @@ def parse_notice_detail(html: str) -> NoticeDetail:
                 if element.find("h2"):  # start of the "more notices" cards
                     break
                 continue
-            text = _clean_text(element)
+            text = _table_text(element) if element.name == "table" else _clean_text(element)
             if element.name in ("ul", "ol") and len(text) < _MIN_LIST_LENGTH:
                 break
             # Skip anything nested in an element that was already captured.
@@ -90,3 +90,14 @@ def _clean_text(element: Tag) -> str:
         br.replace_with("\n")
     lines = (" ".join(line.split()) for line in element.get_text().splitlines())
     return "\n".join(line for line in lines if line)
+
+
+def _table_text(table: Tag) -> str:
+    """One line per row, cells separated by " | "."""
+    rows = []
+    for tr in table.find_all("tr"):
+        cells = [" ".join(_clean_text(c).split()) for c in tr.find_all(["th", "td"])]
+        cells = [c for c in cells if c]
+        if cells:
+            rows.append(" | ".join(cells))
+    return "\n".join(rows)

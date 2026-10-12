@@ -41,9 +41,9 @@ class Outbox:
         self.messages, self.fail_on = [], tuple(fail_on)
 
     def __call__(self, message):
-        if any(marker in message for marker in self.fail_on):
+        if any(marker in message.text for marker in self.fail_on):
             raise TelegramError("rejected")
-        self.messages.append(message)
+        self.messages.append(message.text)
 
 
 def saved(settings):
@@ -99,7 +99,8 @@ def test_unreachable_notice_page_still_sends_without_body(settings):
     outbox = Outbox()
     assert run(settings, fetch=Site(broken={URL_1}), send=outbox) == EXIT_OK
     assert len(outbox.messages) == 1
-    assert "Read full notice" in outbox.messages[0]
+    assert "General Notice" in outbox.messages[0]
+    assert "blockquote" not in outbox.messages[0]
 
 
 def test_unreachable_board_fails_the_run(settings):
