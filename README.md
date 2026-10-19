@@ -18,17 +18,26 @@ Adding Dropping for Fall 2026-27
 ▎ Date: Thursday, October 1 and Sunday, October 4, 2026. …      (tap to expand)
 
 [ 🔗 Read full notice ]
+
+  ↪ 📄 adding-dropping-fall-2026-27.pdf                          (reply with the attached file)
 ```
 
 - A **category tag** is guessed from the title: 🎓 Admission, 📝 Exams, 💰 Scholarship & Aid, 💳 Payments, 🗂️ Registration, 💼 Internship & Thesis, 🏖️ Holiday, 🏆 Events, 🛠️ System, or 📢 General. The rules live in `notice_bot/categories.py`.
 - The excerpt is a **collapsible quote**, and the link is a **button**, so messages stay compact.
+- **Attached files** (PDF schedules, seat plans, notices posted as images) are sent as silent replies
+  under the notice, so nobody has to open the website. Up to 5 per notice.
+- Notices tagged **Exams, Registration or Payments are pinned** in the chat. Change the list with
+  `pin_categories` in `notice_bot/config.py`.
+- Every **Sunday at 09:23** (Bangladesh time) a **weekly digest** lists the past 7 days' notices,
+  grouped by category.
 
 ## How it works
 
 1. Download the notice listing and parse out each notice (title, link, date).
 2. Compare the links with `last_notices.json`, the list of notices already delivered.
-3. For each new notice, oldest first, fetch its page for the full title and body and send it to Telegram.
+3. For each new notice, oldest first, fetch its page for the full title, body and attached files, and send it to Telegram.
 4. Record each delivered notice in `last_notices.json`. The workflow commits that file back to the repo, which is how the bot remembers state between runs.
+5. Upload the notice's files as replies to it, and pin it if its category is in `pin_categories`.
 
 `last_notices.json` records each notice the bot has handled:
 
@@ -47,7 +56,8 @@ before this was added are bare `{"url": …}` objects (or plain URL strings, whi
 Behaviour worth knowing:
 
 - **First run is silent.** If `last_notices.json` doesn't exist, the bot records what is on the board without sending anything, so you don't get dozens of old notices.
-- **Failures are loud.** If the board can't be read, parses to zero notices (the site layout changed, or Cloudflare blocked the request) or a message can't be delivered, the run exits non-zero and the workflow sends a "Scraper Failed" message to the chat. A notice that failed to send is not recorded, so the next run retries it.
+- **Failures are reported, once.** If the board can't be read, parses to zero notices (the site layout changed, or Cloudflare blocked the request) or a message can't be delivered, the run exits non-zero. After 3 failed runs in a row the workflow sends one "⚠️ … has failed" message to the chat, and one "✅ … working again" message when a run succeeds. A one-off failure stays quiet. A notice that failed to send is not recorded, so the next run retries it. To change the threshold, edit `ALERT_AFTER` in `.github/workflows/schedule.yml`.
+- **Files and pins are best effort.** If an attachment can't be downloaded or uploaded, or the bot isn't allowed to pin, a warning is logged and the run carries on. The notice itself has already been delivered and recorded, so it is not sent twice.
 - **A corrupt state file stops the run** instead of being treated as empty, which would resend everything.
 - **Long titles are restored.** The listing truncates titles with "…", so the bot uses the full title from the notice page.
 
@@ -56,7 +66,7 @@ Behaviour worth knowing:
 ### 1. Create the Telegram bot
 
 1. Message [@BotFather](https://t.me/BotFather), send `/newbot`, and copy the token.
-2. Send any message to your new bot (or add it to a group or channel).
+2. Send any message to your new bot (or add it to a group or channel). In a group or channel, make the bot an admin with permission to **pin messages**, or pinning is skipped.
 3. Find your chat ID by opening `https://api.telegram.org/bot<TOKEN>/getUpdates` and reading `message.chat.id`.
 
 ### 2. Deploy on GitHub Actions
@@ -70,7 +80,7 @@ Behaviour worth knowing:
    | `TELEGRAM_CHAT_ID`   | the chat ID from step 1.3   |
 
 3. Under **Settings → Actions → General → Workflow permissions**, choose *Read and write permissions* so the workflow can commit the state file.
-4. If you are starting fresh, delete `last_notices.json` so the first run records the current board silently. Then trigger **Hourly Notice Scraper** from the Actions tab, or wait for the next hour.
+4. If you are starting fresh, delete `last_notices.json` so the first run records the current board silently. Then trigger **Hourly Notice Scraper** from the Actions tab, or wait for the next run (17 minutes past each hour). **Weekly Digest** can be triggered the same way to try it out.
 
 ## Local development
 
@@ -85,6 +95,7 @@ ruff check . && ruff format --check .
 
 python -m notice_bot --dry-run              # print what would be sent; sends nothing, changes nothing
 python -m notice_bot --dry-run --state-file empty.json   # with `[]` in empty.json: preview every notice on the board
+python -m notice_bot --digest --dry-run     # preview the weekly digest
 ```
 
 To send for real from your machine, export `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` and run
@@ -99,12 +110,14 @@ notice_bot/
   parser.py     HTML → data (pure functions, no network)
   http.py       Cloudflare-aware session with retries
   telegram.py   message layout and the Telegram API client
+  digest.py     the weekly digest message
   categories.py title → category tag (emoji + label)
   state.py      the "already sent" store (atomic JSON file)
   config.py     settings
 tests/          pytest suite, with HTML fixtures modelled on the real pages
 .github/workflows/
-  schedule.yml  hourly run + state commit + failure alert
+  schedule.yml  hourly run + state commit + failure/recovery alert
+  digest.yml    weekly digest, Sunday morning
   ci.yml        lint, format check and tests on every push and PR
 ```
 
@@ -114,5 +127,6 @@ tests/          pytest suite, with HTML fixtures modelled on the real pages
 | ------- | ------------ |
 | "No notices found … page structure may have changed" | aiub.edu changed its markup. Update `parse_notice_list` in `notice_bot/parser.py` and add a fixture. |
 | Repeated fetch failures in Actions | Cloudflare is challenging the runner's IP. Re-running usually helps; otherwise see `notice_bot/http.py`. |
-| "Telegram rejected the message: chat not found" | Wrong `TELEGRAM_CHAT_ID`, or you haven't messaged the bot yet. |
+| "Telegram rejected the sendMessage: chat not found" | Wrong `TELEGRAM_CHAT_ID`, or you haven't messaged the bot yet. |
 | The workflow can't push the state file | Enable read and write workflow permissions (setup step 2.3). |
+| "Could not pin …: not enough rights" in the log | Make the bot a group/channel admin allowed to pin messages. |

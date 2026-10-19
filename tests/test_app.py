@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from notice_bot.telegram import TelegramError
 FIXTURES = Path(__file__).parent / "fixtures"
 LISTING = (FIXTURES / "listing.html").read_text(encoding="utf-8")
 DETAIL = (FIXTURES / "detail.html").read_text(encoding="utf-8")
+DETAIL_FILES = (FIXTURES / "detail_attachments.html").read_text(encoding="utf-8")
 
 NOW = "2026-10-12 16:14:33"
 URL_1 = "https://www.aiub.edu/general-notice-regarding-web-groups"
@@ -41,15 +43,41 @@ class Site:
             raise FetchError(f"boom {url}")
         return self.listing if url == "https://board" else self.detail
 
+    def download(self, url):
+        self.requested.append(url)
+        if url in self.broken:
+            raise FetchError(f"boom {url}")
+        return f"bytes of {url}".encode()
+
 
 class Outbox:
-    def __init__(self, fail_on=()):
-        self.messages, self.fail_on = [], tuple(fail_on)
+    """Stands in for Telegram: records what was sent, files and pins."""
 
-    def __call__(self, message):
+    def __init__(self, fail_on=(), fail_files=False, fail_pins=False):
+        self.messages, self.fail_on = [], tuple(fail_on)
+        self.files, self.pins = [], []
+        self.fail_files, self.fail_pins = fail_files, fail_pins
+
+    def send_message(self, message):
         if any(marker in message.text for marker in self.fail_on):
             raise TelegramError("rejected")
         self.messages.append(message.text)
+        return len(self.messages)  # message ID
+
+    def send_file(self, attachment, content, *, reply_to):
+        if self.fail_files:
+            raise TelegramError("file rejected")
+        self.files.append((attachment.filename, content, reply_to))
+
+    def pin_message(self, message_id):
+        if self.fail_pins:
+            raise TelegramError("not an admin")
+        self.pins.append(message_id)
+
+
+def check(settings, site=None, outbox=None, **kwargs):
+    site = site or Site()
+    return run(settings, fetch=site, download=site.download, messenger=outbox, **kwargs)
 
 
 def saved_entries(settings):
@@ -62,7 +90,7 @@ def saved(settings):
 
 def test_first_run_records_board_without_sending(settings):
     outbox = Outbox()
-    assert run(settings, fetch=Site(), send=outbox) == EXIT_OK
+    assert check(settings, Site(), outbox) == EXIT_OK
     assert outbox.messages == []
     assert saved(settings) == [URL_1, URL_2, URL_3]
 
@@ -70,7 +98,7 @@ def test_first_run_records_board_without_sending(settings):
 def test_sends_only_unseen_notices_oldest_first(settings):
     settings.state_file.write_text(json.dumps([URL_3]))
     outbox = Outbox()
-    assert run(settings, fetch=Site(), send=outbox) == EXIT_OK
+    assert check(settings, Site(), outbox) == EXIT_OK
     assert len(outbox.messages) == 2
     assert "Slot_1" in outbox.messages[0]  # second card is older than the first
     assert "General Notice" in outbox.messages[1]
@@ -80,14 +108,14 @@ def test_sends_only_unseen_notices_oldest_first(settings):
 def test_truncated_listing_title_is_replaced_by_full_title(settings):
     settings.state_file.write_text(json.dumps([URL_2, URL_3]))
     outbox = Outbox()
-    run(settings, fetch=Site(), send=outbox)
+    check(settings, Site(), outbox)
     assert "(regarding usage of web groups/ blogs/ social media)" in outbox.messages[0]
 
 
 def test_nothing_new_sends_nothing(settings):
     settings.state_file.write_text(json.dumps([URL_1, URL_2, URL_3]))
     site, outbox = Site(), Outbox()
-    assert run(settings, fetch=site, send=outbox) == EXIT_OK
+    assert check(settings, site, outbox) == EXIT_OK
     assert outbox.messages == []
     assert site.requested == ["https://board"]  # no detail pages fetched
 
@@ -95,11 +123,11 @@ def test_nothing_new_sends_nothing(settings):
 def test_failed_delivery_is_retried_next_run_and_fails_the_run(settings):
     settings.state_file.write_text(json.dumps([URL_3]))
     outbox = Outbox(fail_on=["Slot_1"])
-    assert run(settings, fetch=Site(), send=outbox) == EXIT_FAILED
+    assert check(settings, Site(), outbox) == EXIT_FAILED
     assert len(outbox.messages) == 1  # the other notice still went out
     assert saved(settings) == [URL_3, URL_1]
 
-    assert run(settings, fetch=Site(), send=(retry := Outbox())) == EXIT_OK
+    assert check(settings, Site(), (retry := Outbox())) == EXIT_OK
     assert len(retry.messages) == 1
     assert "Slot_1" in retry.messages[0]
 
@@ -107,7 +135,7 @@ def test_failed_delivery_is_retried_next_run_and_fails_the_run(settings):
 def test_unreachable_notice_page_still_sends_without_body(settings):
     settings.state_file.write_text(json.dumps([URL_2, URL_3]))
     outbox = Outbox()
-    assert run(settings, fetch=Site(broken={URL_1}), send=outbox) == EXIT_OK
+    assert check(settings, Site(broken={URL_1}), outbox) == EXIT_OK
     assert len(outbox.messages) == 1
     assert "General Notice" in outbox.messages[0]
     assert "blockquote" not in outbox.messages[0]
@@ -115,33 +143,33 @@ def test_unreachable_notice_page_still_sends_without_body(settings):
 
 def test_unreachable_board_fails_the_run(settings):
     outbox = Outbox()
-    assert run(settings, fetch=Site(broken={"https://board"}), send=outbox) == EXIT_FAILED
+    assert check(settings, Site(broken={"https://board"}), outbox) == EXIT_FAILED
     assert outbox.messages == []
     assert not settings.state_file.exists()
 
 
 def test_board_without_notices_fails_the_run(settings):
     site = Site(listing="<html><body>Cloudflare challenge</body></html>")
-    assert run(settings, fetch=site, send=Outbox()) == EXIT_FAILED
+    assert check(settings, site, Outbox()) == EXIT_FAILED
 
 
 def test_dry_run_prints_and_leaves_state_untouched(settings, capsys):
     settings.state_file.write_text(json.dumps([URL_3]))
     outbox = Outbox()
-    assert run(settings, fetch=Site(), send=outbox, dry_run=True) == EXIT_OK
+    assert check(settings, Site(), outbox, dry_run=True) == EXIT_OK
     assert outbox.messages == []
     assert saved(settings) == [URL_3]
     assert capsys.readouterr().out.count("would send") == 2
 
 
 def test_dry_run_first_run_does_not_create_state(settings):
-    run(settings, fetch=Site(), send=Outbox(), dry_run=True)
+    check(settings, Site(), Outbox(), dry_run=True)
     assert not settings.state_file.exists()
 
 
 def test_state_records_title_board_date_and_time_seen(settings):
     settings.state_file.write_text(json.dumps([URL_2, URL_3]))
-    run(settings, fetch=Site(), send=Outbox())
+    check(settings, Site(), Outbox())
     # The full title from the notice page is stored, not the truncated one.
     assert saved_entries(settings)[-1] == {
         "url": URL_1,
@@ -152,10 +180,84 @@ def test_state_records_title_board_date_and_time_seen(settings):
 
 
 def test_first_run_records_details_too(settings):
-    run(settings, fetch=Site(), send=Outbox())
+    check(settings, Site(), Outbox())
     assert saved_entries(settings)[1] == {
         "url": URL_2,
         "title": "Result & Viva: *Slot_1*",
         "date": "5 September 2026",
         "seen_at": NOW,
     }
+
+
+def test_attachments_are_sent_as_replies_to_their_notice(settings):
+    settings.state_file.write_text(json.dumps([URL_2, URL_3]))
+    outbox = Outbox()
+    assert check(settings, Site(detail=DETAIL_FILES), outbox) == EXIT_OK
+    assert [(name, reply_to) for name, _, reply_to in outbox.files] == [
+        ("ll.-b.-1.pdf", 1),
+        ("b.-pharm-1.pdf", 1),
+        ("exam-schedule-[ug-&-pg).pdf", 1),
+        ("1(2).webp", 1),
+    ]
+    assert outbox.files[0][1] == b"bytes of https://www.aiub.edu/Files/Uploads/ll.-b.-1.pdf"
+
+
+def test_attachments_beyond_the_limit_are_not_sent(settings):
+    settings = replace(settings, max_attachments=2)
+    settings.state_file.write_text(json.dumps([URL_2, URL_3]))
+    outbox = Outbox()
+    check(settings, Site(detail=DETAIL_FILES), outbox)
+    assert len(outbox.files) == 2
+
+
+def test_failed_attachments_do_not_fail_the_run_or_resend_the_notice(settings):
+    settings.state_file.write_text(json.dumps([URL_2, URL_3]))
+    broken = {"https://www.aiub.edu/Files/Uploads/ll.-b.-1.pdf"}
+    outbox = Outbox()
+    assert check(settings, Site(detail=DETAIL_FILES, broken=broken), outbox) == EXIT_OK
+    assert len(outbox.files) == 3  # the others still went out
+    assert URL_1 in saved(settings)
+
+
+def test_rejected_attachments_still_record_the_notice(settings):
+    settings.state_file.write_text(json.dumps([URL_2, URL_3]))
+    outbox = Outbox(fail_files=True)
+    assert check(settings, Site(detail=DETAIL_FILES), outbox) == EXIT_OK
+    assert len(outbox.messages) == 1
+    assert URL_1 in saved(settings)
+
+
+def test_notices_in_pinned_categories_are_pinned(settings):
+    settings.state_file.write_text(json.dumps([URL_3]))
+    outbox = Outbox()
+    check(settings, Site(), outbox)
+    # Message 1 is "Result & Viva" (Exams); message 2 is a general notice.
+    assert outbox.pins == [1]
+
+
+def test_failed_pin_does_not_fail_the_run(settings):
+    settings.state_file.write_text(json.dumps([URL_3]))
+    outbox = Outbox(fail_pins=True)
+    assert check(settings, Site(), outbox) == EXIT_OK
+    assert len(outbox.messages) == 2
+
+
+def test_dry_run_lists_attachments_and_pins(settings, capsys):
+    settings.state_file.write_text(json.dumps([URL_1, URL_3]))
+    site = Site(detail=DETAIL_FILES)
+    check(settings, site, None, dry_run=True)
+    out = capsys.readouterr().out
+    assert "+ document: ll.-b.-1.pdf" in out
+    assert "(would pin)" in out
+    assert not any("Files/Uploads" in url for url in site.requested)  # nothing downloaded
+
+
+def test_click_here_placeholder_body_is_dropped_when_files_follow(settings):
+    settings.state_file.write_text(json.dumps([URL_2, URL_3]))
+    detail = (
+        "<h1>Mid Term Exam Schedule</h1><div class='question-column'><p>"
+        "<a href='/Files/Uploads/schedule.pdf'>Please Click Here for More Details</a></p></div>"
+    )
+    outbox = Outbox()
+    check(settings, Site(detail=detail), outbox)
+    assert "blockquote" not in outbox.messages[0]

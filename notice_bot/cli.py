@@ -9,7 +9,8 @@ from pathlib import Path
 from notice_bot import __version__
 from notice_bot.app import EXIT_FAILED, run
 from notice_bot.config import DEFAULT_STATE_FILE, Settings
-from notice_bot.http import create_session, fetch_html
+from notice_bot.digest import run_digest
+from notice_bot.http import create_session, fetch_file, fetch_html
 from notice_bot.state import StateError
 from notice_bot.telegram import TelegramClient
 
@@ -32,6 +33,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print messages instead of sending them; the state file is not modified",
     )
+    parser.add_argument(
+        "--digest",
+        action="store_true",
+        help="send a summary of the past week's notices instead of checking the board",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="enable debug logging")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
@@ -50,16 +56,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         log.error("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set (or use --dry-run).")
         return EXIT_FAILED
 
-    session = create_session()
-    fetch = partial(fetch_html, session, timeout=settings.request_timeout)
-    if args.dry_run:
-        send = print  # never called: run() prints dry-run output itself
-    else:
+    messenger = None
+    if not args.dry_run:
         assert settings.telegram_token and settings.telegram_chat_id
-        send = TelegramClient(settings.telegram_token, settings.telegram_chat_id).send_message
+        messenger = TelegramClient(settings.telegram_token, settings.telegram_chat_id)
 
     try:
-        return run(settings, fetch=fetch, send=send, dry_run=args.dry_run)
+        if args.digest:
+            return run_digest(settings, messenger=messenger, dry_run=args.dry_run)
+        session = create_session()
+        fetch = partial(fetch_html, session, timeout=settings.request_timeout)
+        download = partial(
+            fetch_file,
+            session,
+            timeout=settings.request_timeout,
+            max_bytes=settings.max_attachment_bytes,
+        )
+        return run(
+            settings, fetch=fetch, download=download, messenger=messenger, dry_run=args.dry_run
+        )
     except StateError as exc:
         log.error("%s", exc)
         return EXIT_FAILED

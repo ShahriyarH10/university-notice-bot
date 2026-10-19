@@ -3,7 +3,7 @@ import json
 import pytest
 import requests
 
-from notice_bot.models import Notice
+from notice_bot.models import Attachment, Notice
 from notice_bot.parser import DATE_UNAVAILABLE
 from notice_bot.telegram import (
     MESSAGE_LIMIT,
@@ -102,8 +102,8 @@ class FakeSession:
         self.responses = list(responses)
         self.calls = []
 
-    def post(self, url, data, timeout):
-        self.calls.append((url, data))
+    def post(self, url, data, timeout, files=None):
+        self.calls.append((url, data, files))
         item = self.responses.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -111,6 +111,9 @@ class FakeSession:
 
 
 HI = OutgoingMessage(text="hi", button_url="https://x")
+SENT = {"ok": True, "result": {"message_id": 7}}
+PDF = Attachment(url="https://x/a.pdf", filename="a.pdf", kind="document", label="LL.B")
+PHOTO = Attachment(url="https://x/1.webp", filename="1.webp", kind="photo")
 
 
 def client(session, **kwargs):
@@ -119,9 +122,9 @@ def client(session, **kwargs):
 
 class TestSendMessage:
     def test_posts_html_message(self):
-        session = FakeSession(FakeResponse(200, {"ok": True}))
-        client(session).send_message(HI)
-        url, data = session.calls[0]
+        session = FakeSession(FakeResponse(200, SENT))
+        assert client(session).send_message(HI) == 7
+        url, data, _ = session.calls[0]
         assert url == "https://api.telegram.org/botSECRET-TOKEN/sendMessage"
         assert data["chat_id"] == "42"
         assert data["text"] == "hi"
@@ -146,7 +149,7 @@ class TestSendMessage:
         monkeypatch.setattr("notice_bot.telegram.time.sleep", sleeps.append)
         session = FakeSession(
             FakeResponse(429, {"ok": False, "parameters": {"retry_after": 3}}),
-            FakeResponse(200, {"ok": True}),
+            FakeResponse(200, SENT),
         )
         client(session).send_message(HI)
         assert sleeps == [3]
@@ -171,3 +174,47 @@ class TestSendMessage:
             client(FakeSession(error)).send_message(HI)
         assert "SECRET-TOKEN" not in str(info.value)
         assert "***" in str(info.value)
+
+
+class TestSendFile:
+    def test_document_is_uploaded_as_a_silent_reply_with_caption(self):
+        session = FakeSession(FakeResponse(200, SENT))
+        client(session).send_file(PDF, b"%PDF", reply_to=5)
+        url, data, files = session.calls[0]
+        assert url.endswith("/sendDocument")
+        assert files == {"document": ("a.pdf", b"%PDF")}
+        assert data["caption"] == "LL.B"
+        assert data["disable_notification"] == "true"
+        assert json.loads(data["reply_parameters"]) == {
+            "message_id": 5,
+            "allow_sending_without_reply": True,
+        }
+
+    def test_image_is_sent_as_photo_without_empty_caption(self):
+        session = FakeSession(FakeResponse(200, SENT))
+        client(session).send_file(PHOTO, b"img", reply_to=5)
+        url, data, files = session.calls[0]
+        assert url.endswith("/sendPhoto")
+        assert files == {"photo": ("1.webp", b"img")}
+        assert "caption" not in data
+
+    def test_rejected_photo_falls_back_to_document(self):
+        session = FakeSession(
+            FakeResponse(400, {"ok": False, "description": "PHOTO_INVALID_DIMENSIONS"}),
+            FakeResponse(200, SENT),
+        )
+        client(session).send_file(PHOTO, b"img", reply_to=5)
+        assert session.calls[1][0].endswith("/sendDocument")
+
+    def test_rejected_document_raises(self):
+        session = FakeSession(FakeResponse(400, {"ok": False, "description": "too big"}))
+        with pytest.raises(TelegramError, match="too big"):
+            client(session).send_file(PDF, b"x", reply_to=5)
+
+
+def test_pin_message_is_silent():
+    session = FakeSession(FakeResponse(200, {"ok": True, "result": True}))
+    client(session).pin_message(7)
+    url, data, _ = session.calls[0]
+    assert url.endswith("/pinChatMessage")
+    assert data == {"chat_id": "42", "message_id": "7", "disable_notification": "true"}

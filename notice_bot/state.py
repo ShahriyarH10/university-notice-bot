@@ -50,6 +50,10 @@ class SeenStore:
     def __len__(self) -> int:
         return len(self._entries)
 
+    def entries(self) -> list[SeenEntry]:
+        """All entries, oldest first."""
+        return list(self._entries.values())
+
     def load(self) -> None:
         """Read the file. A corrupt file raises instead of reading as empty,
         which would make the bot re-send every notice on the board."""

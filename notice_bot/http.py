@@ -29,13 +29,35 @@ def fetch_html(
     backoff: float = 2.0,
 ) -> str:
     """GET `url` and return the body, retrying transient failures."""
+    return _get(session, url, timeout=timeout, attempts=attempts, backoff=backoff).text
+
+
+def fetch_file(
+    session: requests.Session,
+    url: str,
+    *,
+    max_bytes: int,
+    timeout: float = 30.0,
+    attempts: int = 3,
+    backoff: float = 2.0,
+) -> bytes:
+    """GET `url` and return the raw bytes, refusing anything over `max_bytes`."""
+    content = _get(session, url, timeout=timeout, attempts=attempts, backoff=backoff).content
+    if len(content) > max_bytes:
+        raise FetchError(f"{url} is {len(content)} bytes, over the {max_bytes}-byte limit")
+    return content
+
+
+def _get(
+    session: requests.Session, url: str, *, timeout: float, attempts: int, backoff: float
+) -> requests.Response:
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
             log.info("Fetching %s (attempt %d/%d)", url, attempt, attempts)
             response = session.get(url, timeout=timeout)
             response.raise_for_status()
-            return response.text
+            return response
         except requests.RequestException as exc:
             last_error = exc
             log.warning("Fetch of %s failed: %s", url, exc)

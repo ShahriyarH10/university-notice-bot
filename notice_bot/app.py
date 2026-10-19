@@ -4,10 +4,12 @@ import logging
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
+from typing import Protocol
 
+from notice_bot.categories import categorize
 from notice_bot.config import LOCAL_TZ, Settings
 from notice_bot.http import FetchError
-from notice_bot.models import Notice
+from notice_bot.models import Attachment, Notice
 from notice_bot.parser import parse_notice_detail, parse_notice_list
 from notice_bot.state import SeenStore
 from notice_bot.telegram import OutgoingMessage, TelegramError, format_message
@@ -15,13 +17,31 @@ from notice_bot.telegram import OutgoingMessage, TelegramError, format_message
 log = logging.getLogger(__name__)
 
 Fetch = Callable[[str], str]
-Send = Callable[[OutgoingMessage], None]
+Download = Callable[[str], bytes]
+
+
+class Messenger(Protocol):
+    """Where notices are delivered (TelegramClient in production)."""
+
+    def send_message(self, message: OutgoingMessage) -> int: ...
+
+    def send_file(self, attachment: Attachment, content: bytes, *, reply_to: int) -> None: ...
+
+    def pin_message(self, message_id: int) -> None: ...
+
 
 EXIT_OK = 0
 EXIT_FAILED = 1
 
 
-def run(settings: Settings, *, fetch: Fetch, send: Send, dry_run: bool = False) -> int:
+def run(
+    settings: Settings,
+    *,
+    fetch: Fetch,
+    download: Download,
+    messenger: Messenger | None,
+    dry_run: bool = False,
+) -> int:
     """Check the notice board once and deliver anything new.
 
     Returns a process exit code: non-zero if the board could not be read or any
@@ -63,19 +83,33 @@ def run(settings: Settings, *, fetch: Fetch, send: Send, dry_run: bool = False) 
     # Oldest first, so they arrive in chronological order.
     for notice in reversed(new_notices):
         log.info("New notice: %s", notice.title)
-        notice, message = _prepare(notice, fetch, settings)
+        notice, message, attachments = _prepare(notice, fetch, settings)
+        pin = categorize(notice.title).label in settings.pin_categories
         if dry_run:
             print("--- dry run: would send ---")
-            print(f"{message.text}\n[{message.button_label}] {message.button_url}\n")
+            print(f"{message.text}\n[{message.button_label}] {message.button_url}")
+            for attachment in attachments:
+                print(f"+ {attachment.kind}: {attachment.filename}  ({attachment.url})")
+            print("(would pin)\n" if pin else "")
             continue
+        assert messenger is not None
         try:
-            send(message)
+            message_id = messenger.send_message(message)
         except TelegramError as exc:
             failures += 1
             log.error("Could not send %r: %s", notice.title, exc)
             continue  # not marked as seen, so the next run retries it
         store.add(notice.url, title=notice.title, date=notice.date, seen_at=_now())
         store.save()  # persist per notice so a crash can't cause duplicates
+
+        # Extras are best-effort: the notice itself is already delivered and
+        # recorded, and retrying them would mean sending it again.
+        _send_attachments(attachments, message_id, download, messenger)
+        if pin:
+            try:
+                messenger.pin_message(message_id)
+            except TelegramError as exc:
+                log.warning("Could not pin %r: %s", notice.title, exc)
 
     if dry_run:
         log.info("Dry run: %d notice(s) would be sent.", len(new_notices))
@@ -105,17 +139,47 @@ def _now() -> str:
     return datetime.now(LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _prepare(notice: Notice, fetch: Fetch, settings: Settings) -> tuple[Notice, OutgoingMessage]:
+def _prepare(
+    notice: Notice, fetch: Fetch, settings: Settings
+) -> tuple[Notice, OutgoingMessage, tuple[Attachment, ...]]:
     """Fetch the notice page; return the notice (with its full title, if the
-    listing truncated it) and the message to send."""
+    listing truncated it), the message to send and the files to send with it."""
     body = ""
+    attachments: tuple[Attachment, ...] = ()
     try:
         detail = parse_notice_detail(fetch(notice.url))
     except FetchError as exc:
         log.warning("Sending %r without a body: %s", notice.title, exc)
     else:
         body = detail.body
+        attachments = detail.attachments[: settings.max_attachments]
+        # A notice that is only a file often has "Please Click Here for More
+        # Details" as its whole text; the file itself follows the message.
+        if attachments and len(body) < 80 and "click here" in body.casefold():
+            body = ""
+        if len(detail.attachments) > len(attachments):
+            log.info(
+                "Sending %d of %d attachments of %r",
+                len(attachments),
+                len(detail.attachments),
+                notice.title,
+            )
         # The listing truncates long titles with "..."; prefer the full one.
         if detail.title and _is_truncation_of(notice.title, detail.title):
             notice = replace(notice, title=detail.title)
-    return notice, format_message(notice, body, max_body_length=settings.max_body_length)
+    message = format_message(notice, body, max_body_length=settings.max_body_length)
+    return notice, message, attachments
+
+
+def _send_attachments(
+    attachments: tuple[Attachment, ...],
+    reply_to: int,
+    download: Download,
+    messenger: Messenger,
+) -> None:
+    for attachment in attachments:
+        try:
+            content = download(attachment.url)
+            messenger.send_file(attachment, content, reply_to=reply_to)
+        except (FetchError, TelegramError) as exc:
+            log.warning("Could not send attachment %s: %s", attachment.filename, exc)

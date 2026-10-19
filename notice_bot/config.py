@@ -27,6 +27,14 @@ class Settings:
     # notices could be re-sent.
     max_state_entries: int = 500
     request_timeout: float = 30.0
+    # Notices in these categories are pinned in the chat (see categories.py).
+    pin_categories: frozenset[str] = frozenset({"Exams", "Registration", "Payments"})
+    # Files sent with each notice, at most; extra ones are reachable via the link.
+    max_attachments: int = 5
+    # Telegram bots can upload up to 50 MB.
+    max_attachment_bytes: int = 45 * 1024 * 1024
+    # How far back the digest (--digest) looks.
+    digest_days: int = 7
 
     @classmethod
     def from_env(cls, **overrides: object) -> Settings:

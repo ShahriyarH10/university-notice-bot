@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from notice_bot.models import Notice
+from notice_bot.models import Attachment, Notice
 from notice_bot.parser import DATE_UNAVAILABLE, parse_notice_detail, parse_notice_list
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -85,3 +85,34 @@ class TestParseNoticeDetail:
         detail = parse_notice_detail("<html><body></body></html>")
         assert detail.title is None
         assert detail.body == ""
+
+
+class TestAttachments:
+    def test_files_linked_or_embedded_in_the_notice_are_found_in_page_order(self):
+        attachments = parse_notice_detail(read("detail_attachments.html")).attachments
+        assert [(a.kind, a.filename) for a in attachments] == [
+            ("document", "ll.-b.-1.pdf"),
+            ("document", "b.-pharm-1.pdf"),
+            ("document", "exam-schedule-[ug-&-pg).pdf"),
+            ("photo", "1(2).webp"),
+        ]
+
+    def test_links_are_absolute_and_the_link_text_is_the_label(self):
+        first = parse_notice_detail(read("detail_attachments.html")).attachments[0]
+        assert first == Attachment(
+            url="https://www.aiub.edu/Files/Uploads/ll.-b.-1.pdf",
+            filename="ll.-b.-1.pdf",
+            kind="document",
+            label="LL.B",
+        )
+
+    def test_click_here_link_text_is_not_used_as_a_label(self):
+        attachments = parse_notice_detail(read("detail_attachments.html")).attachments
+        assert attachments[2].label == ""
+
+    def test_site_logo_pages_and_related_notices_are_ignored(self):
+        urls = [a.url for a in parse_notice_detail(read("detail_attachments.html")).attachments]
+        assert not any("Templates" in u or "about" in u or "unrelated" in u for u in urls)
+
+    def test_notice_without_files_has_none(self):
+        assert parse_notice_detail(read("detail.html")).attachments == ()

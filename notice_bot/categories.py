@@ -41,6 +41,10 @@ _RULES: tuple[tuple[Category, tuple[str, ...]], ...] = (
 )
 
 
+# Every category, in the order used to group the weekly digest.
+CATEGORIES: tuple[Category, ...] = (*(category for category, _ in _RULES), GENERAL)
+
+
 def categorize(title: str) -> Category:
     # Padded so keywords with a trailing space ("cv ", "fee ") also match at the end.
     haystack = f"{title.casefold()} "
