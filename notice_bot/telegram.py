@@ -53,7 +53,7 @@ def format_message(notice: Notice, body: str, *, max_body_length: int = 600) -> 
 
     Layout::
 
-        🎓 Admission · 📅 23 Sep 2026
+        🎓 #Admission · 📅 23 Sep 2026
 
         Notice title in bold
 
@@ -66,7 +66,7 @@ def format_message(notice: Notice, body: str, *, max_body_length: int = 600) -> 
     shortening the body can never cut it in half.
     """
     category = categorize(notice.title)
-    meta = f"{category.emoji} <b>{html.escape(category.label)}</b>"
+    meta = f"{category.emoji} {category.hashtag}"
     if notice.date != DATE_UNAVAILABLE:
         meta += f"  ·  📅 {html.escape(notice.date)}"
 
@@ -154,6 +154,9 @@ class TelegramClient:
         self._call(
             "pinChatMessage", {"message_id": str(message_id), "disable_notification": "true"}
         )
+
+    def unpin_message(self, message_id: int) -> None:
+        self._call("unpinChatMessage", {"message_id": str(message_id)})
 
     def _call(
         self,

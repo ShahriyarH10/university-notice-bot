@@ -53,10 +53,10 @@ class Site:
 class Outbox:
     """Stands in for Telegram: records what was sent, files and pins."""
 
-    def __init__(self, fail_on=(), fail_files=False, fail_pins=False):
+    def __init__(self, fail_on=(), fail_files=False, fail_pins=False, unpin_error=None):
         self.messages, self.fail_on = [], tuple(fail_on)
-        self.files, self.pins = [], []
-        self.fail_files, self.fail_pins = fail_files, fail_pins
+        self.files, self.pins, self.unpins = [], [], []
+        self.fail_files, self.fail_pins, self.unpin_error = fail_files, fail_pins, unpin_error
 
     def send_message(self, message):
         if any(marker in message.text for marker in self.fail_on):
@@ -73,6 +73,11 @@ class Outbox:
         if self.fail_pins:
             raise TelegramError("not an admin")
         self.pins.append(message_id)
+
+    def unpin_message(self, message_id):
+        if self.unpin_error:
+            raise TelegramError(self.unpin_error)
+        self.unpins.append(message_id)
 
 
 def check(settings, site=None, outbox=None, **kwargs):
@@ -261,3 +266,70 @@ def test_click_here_placeholder_body_is_dropped_when_files_follow(settings):
     outbox = Outbox()
     check(settings, Site(detail=detail), outbox)
     assert "blockquote" not in outbox.messages[0]
+
+
+def pinned_state(*pins):
+    """State with every board notice seen, plus older pinned notices.
+    Each pin is (message ID, seen_at)."""
+    entries = [
+        {
+            "url": f"https://www.aiub.edu/pinned-{mid}",
+            "title": f"Pinned {mid}",
+            "seen_at": at,
+            "pinned": mid,
+        }
+        for mid, at in pins
+    ]
+    return [*entries, URL_1, URL_2, URL_3]
+
+
+def pins_in(settings):
+    return [e["pinned"] for e in saved_entries(settings) if isinstance(e, dict) and "pinned" in e]
+
+
+def test_pinned_message_id_is_recorded(settings):
+    settings.state_file.write_text(json.dumps([URL_3]))
+    check(settings, Site(), Outbox())
+    assert pins_in(settings) == [1]
+
+
+def test_oldest_pins_beyond_the_limit_are_unpinned(settings):
+    settings = replace(settings, max_pins=2)
+    recent = "2026-10-11 10:00:00"
+    settings.state_file.write_text(
+        json.dumps(pinned_state((10, recent), (11, recent), (12, recent)))
+    )
+    outbox = Outbox()
+    assert check(settings, Site(), outbox) == EXIT_OK
+    assert outbox.unpins == [10]
+    assert pins_in(settings) == [11, 12]
+
+
+def test_pins_older_than_pin_days_are_unpinned_even_with_nothing_new(settings):
+    settings.state_file.write_text(
+        json.dumps(pinned_state((10, "2026-09-27 10:00:00"), (11, "2026-10-01 10:00:00")))
+    )
+    outbox = Outbox()
+    check(settings, Site(), outbox)
+    assert outbox.messages == []
+    assert outbox.unpins == [10]  # 15 days old; 11 is 11 days old
+    assert pins_in(settings) == [11]
+
+
+def test_failed_unpin_is_retried_next_run(settings):
+    settings.state_file.write_text(json.dumps(pinned_state((10, "2026-09-01 10:00:00"))))
+    assert check(settings, Site(), Outbox(unpin_error="Too Many Requests")) == EXIT_OK
+    assert pins_in(settings) == [10]
+
+
+def test_pin_of_a_deleted_message_is_forgotten(settings):
+    settings.state_file.write_text(json.dumps(pinned_state((10, "2026-09-01 10:00:00"))))
+    check(settings, Site(), Outbox(unpin_error="Bad Request: message to unpin not found"))
+    assert pins_in(settings) == []
+
+
+def test_dry_run_reports_unpins_without_changing_state(settings, capsys):
+    settings.state_file.write_text(json.dumps(pinned_state((10, "2026-09-01 10:00:00"))))
+    check(settings, Site(), None, dry_run=True)
+    assert "would unpin Pinned 10" in capsys.readouterr().out
+    assert pins_in(settings) == [10]

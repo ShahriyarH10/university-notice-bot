@@ -9,7 +9,7 @@ It runs hourly on GitHub Actions, so there is no server to host.
 Each message looks like this:
 
 ```
-🗂️ Registration  ·  📅 27 Sep 2026
+🗂️ #Registration  ·  📅 27 Sep 2026
 
 Adding Dropping for Fall 2026-27
 
@@ -22,12 +22,13 @@ Adding Dropping for Fall 2026-27
   ↪ 📄 adding-dropping-fall-2026-27.pdf                          (reply with the attached file)
 ```
 
-- A **category tag** is guessed from the title: 🎓 Admission, 📝 Exams, 💰 Scholarship & Aid, 💳 Payments, 🗂️ Registration, 💼 Internship & Thesis, 🏖️ Holiday, 🏆 Events, 🛠️ System, or 📢 General. The rules live in `notice_bot/categories.py`.
+- A **category hashtag** is guessed from the title: 🎓 #Admission, 📝 #Exams, 💰 #Scholarship_Aid, 💳 #Payments, 🗂️ #Registration, 💼 #Internship_Thesis, 🏖️ #Holiday, 🏆 #Events, 🛠️ #System, or 📢 #General. Tapping one in Telegram lists every notice with that tag. The rules live in `notice_bot/categories.py`.
 - The excerpt is a **collapsible quote**, and the link is a **button**, so messages stay compact.
 - **Attached files** (PDF schedules, seat plans, notices posted as images) are sent as silent replies
   under the notice, so nobody has to open the website. Up to 5 per notice.
-- Notices tagged **Exams, Registration or Payments are pinned** in the chat. Change the list with
-  `pin_categories` in `notice_bot/config.py`.
+- Notices tagged **Exams, Registration or Payments are pinned** in the chat. The bot keeps at most
+  5 pins and removes each one after 14 days, so the pinned bar stays current. It only ever unpins
+  its own pins. Change these with `pin_categories`, `max_pins` and `pin_days` in `notice_bot/config.py`.
 - Every **Sunday at 09:23** (Bangladesh time) a **weekly digest** lists the past 7 days' notices,
   grouped by category.
 
@@ -38,6 +39,7 @@ Adding Dropping for Fall 2026-27
 3. For each new notice, oldest first, fetch its page for the full title, body and attached files, and send it to Telegram.
 4. Record each delivered notice in `last_notices.json`. The workflow commits that file back to the repo, which is how the bot remembers state between runs.
 5. Upload the notice's files as replies to it, and pin it if its category is in `pin_categories`.
+6. Unpin the bot's own pins that are over the limit or too old. The pinned message's ID is stored as `pinned` in that notice's entry until it is unpinned.
 
 `last_notices.json` records each notice the bot has handled:
 

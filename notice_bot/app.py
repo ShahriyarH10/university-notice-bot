@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from notice_bot.categories import categorize
@@ -11,7 +11,7 @@ from notice_bot.config import LOCAL_TZ, Settings
 from notice_bot.http import FetchError
 from notice_bot.models import Attachment, Notice
 from notice_bot.parser import parse_notice_detail, parse_notice_list
-from notice_bot.state import SeenStore
+from notice_bot.state import SEEN_AT_FORMAT, SeenStore
 from notice_bot.telegram import OutgoingMessage, TelegramError, format_message
 
 log = logging.getLogger(__name__)
@@ -28,6 +28,8 @@ class Messenger(Protocol):
     def send_file(self, attachment: Attachment, content: bytes, *, reply_to: int) -> None: ...
 
     def pin_message(self, message_id: int) -> None: ...
+
+    def unpin_message(self, message_id: int) -> None: ...
 
 
 EXIT_OK = 0
@@ -77,7 +79,6 @@ def run(
     new_notices = [n for n in notices if n.url not in store]
     if not new_notices:
         log.info("No new notices. Standing by.")
-        return EXIT_OK
 
     failures = 0
     # Oldest first, so they arrive in chronological order.
@@ -110,12 +111,49 @@ def run(
                 messenger.pin_message(message_id)
             except TelegramError as exc:
                 log.warning("Could not pin %r: %s", notice.title, exc)
+            else:
+                store.set_pinned(notice.url, message_id)
+                store.save()
 
-    if dry_run:
+    if new_notices and dry_run:
         log.info("Dry run: %d notice(s) would be sent.", len(new_notices))
-    else:
+    elif new_notices:
         log.info("Done. %d sent, %d failed.", len(new_notices) - failures, failures)
+
+    _unpin_old(store, messenger, settings, dry_run=dry_run)
     return EXIT_FAILED if failures else EXIT_OK
+
+
+def _unpin_old(
+    store: SeenStore, messenger: Messenger | None, settings: Settings, *, dry_run: bool
+) -> None:
+    """Unpin the bot's pins beyond the newest `max_pins`, and any older than
+    `pin_days`. Pins made by people in the chat are never touched."""
+    pinned = store.pinned()
+    now = datetime.strptime(_now(), SEEN_AT_FORMAT).replace(tzinfo=LOCAL_TZ)
+    cutoff = now - timedelta(days=settings.pin_days)
+    overflow = max(len(pinned) - settings.max_pins, 0)
+    expired = pinned[:overflow] + [
+        e for e in pinned[overflow:] if e.seen_time is not None and e.seen_time < cutoff
+    ]
+
+    for entry in expired:
+        assert entry.pinned is not None
+        if dry_run:
+            print(f"--- dry run: would unpin {entry.title or entry.url}")
+            continue
+        assert messenger is not None
+        try:
+            messenger.unpin_message(entry.pinned)
+        except TelegramError as exc:
+            # Someone deleted the message: there is nothing left to unpin.
+            # Anything else may be temporary, so try again next run.
+            if "not found" not in str(exc):
+                log.warning("Could not unpin %r: %s", entry.title, exc)
+                continue
+        log.info("Unpinned %r", entry.title)
+        store.set_pinned(entry.url, None)
+        store.save()
 
 
 def _is_truncation_of(short: str, full: str) -> bool:
@@ -136,7 +174,7 @@ def _alnum(text: str) -> str:
 
 def _now() -> str:
     """Current local (UTC+6) date and time, e.g. 2026-10-12 16:14:33."""
-    return datetime.now(LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(LOCAL_TZ).strftime(SEEN_AT_FORMAT)
 
 
 def _prepare(

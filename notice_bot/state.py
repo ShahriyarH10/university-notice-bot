@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
+from datetime import datetime
 from pathlib import Path
+
+from notice_bot.config import LOCAL_TZ
 
 log = logging.getLogger(__name__)
 
@@ -25,6 +28,19 @@ class SeenEntry:
     # Local date and time ("YYYY-MM-DD HH:MM:SS") when the bot sent, or on a
     # first run recorded, the notice.
     seen_at: str | None = None
+    # Telegram message ID, while the bot keeps the notice pinned.
+    pinned: int | None = None
+
+    @property
+    def seen_time(self) -> datetime | None:
+        """`seen_at` as a datetime, or None if missing or malformed."""
+        try:
+            return datetime.strptime(self.seen_at or "", SEEN_AT_FORMAT).replace(tzinfo=LOCAL_TZ)
+        except ValueError:
+            return None
+
+
+SEEN_AT_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 class SeenStore:
@@ -54,6 +70,14 @@ class SeenStore:
         """All entries, oldest first."""
         return list(self._entries.values())
 
+    def pinned(self) -> list[SeenEntry]:
+        """Entries the bot currently has pinned, oldest first."""
+        return [e for e in self._entries.values() if e.pinned is not None]
+
+    def set_pinned(self, url: str, message_id: int | None) -> None:
+        """Record that `url`'s message is pinned (an ID) or no longer is (None)."""
+        self._entries[url] = replace(self._entries[url], pinned=message_id)
+
     def load(self) -> None:
         """Read the file. A corrupt file raises instead of reading as empty,
         which would make the bot re-send every notice on the board."""
@@ -75,8 +99,10 @@ class SeenStore:
             return SeenEntry(url=item)
         if isinstance(item, dict) and isinstance(item.get("url"), str):
             fields = {k: item.get(k) for k in ("title", "date", "seen_at")}
-            if all(v is None or isinstance(v, str) for v in fields.values()):
-                return SeenEntry(url=item["url"], **fields)
+            pinned = item.get("pinned")
+            valid_pin = pinned is None or (isinstance(pinned, int) and not isinstance(pinned, bool))
+            if valid_pin and all(v is None or isinstance(v, str) for v in fields.values()):
+                return SeenEntry(url=item["url"], **fields, pinned=pinned)
         raise StateError(f"{self.path} has an invalid entry: {item!r}")
 
     def add(

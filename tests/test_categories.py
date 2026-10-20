@@ -1,6 +1,6 @@
 import pytest
 
-from notice_bot.categories import GENERAL, categorize
+from notice_bot.categories import CATEGORIES, GENERAL, Category, categorize
 
 
 @pytest.mark.parametrize(
@@ -32,3 +32,20 @@ def test_unrecognised_title_is_general():
 
 def test_matching_ignores_case():
     assert categorize("ADMISSION TEST FINAL RESULT").label == "Admission"
+
+
+@pytest.mark.parametrize(
+    ("label", "hashtag"),
+    [
+        ("Exams", "#Exams"),
+        ("Scholarship & Aid", "#Scholarship_Aid"),
+        ("Internship & Thesis", "#Internship_Thesis"),
+    ],
+)
+def test_hashtag_keeps_only_characters_telegram_allows(label, hashtag):
+    assert Category(label, "x").hashtag == hashtag
+
+
+def test_every_category_has_a_distinct_hashtag():
+    tags = [c.hashtag for c in CATEGORIES]
+    assert len(set(tags)) == len(tags)

@@ -29,6 +29,10 @@ class Settings:
     request_timeout: float = 30.0
     # Notices in these categories are pinned in the chat (see categories.py).
     pin_categories: frozenset[str] = frozenset({"Exams", "Registration", "Payments"})
+    # Pins the bot keeps at once; older ones are unpinned as new ones arrive.
+    max_pins: int = 5
+    # A pin is removed this many days after the notice was sent.
+    pin_days: int = 14
     # Files sent with each notice, at most; extra ones are reachable via the link.
     max_attachments: int = 5
     # Telegram bots can upload up to 50 MB.

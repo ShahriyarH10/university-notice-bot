@@ -14,7 +14,6 @@ from notice_bot.telegram import MESSAGE_LIMIT, OutgoingMessage, TelegramError, s
 
 log = logging.getLogger(__name__)
 
-_SEEN_AT_FORMAT = "%Y-%m-%d %H:%M:%S"
 # Room kept free for the "…and N more" line.
 _OVERFLOW_RESERVE = 40
 
@@ -26,7 +25,7 @@ def build_digest(
     None if there were none. Entries without a title or time (written by old
     versions of the bot) are skipped."""
     since = now - timedelta(days=days)
-    recent = [e for e in entries if e.title and _seen_time(e) and since <= _seen_time(e) <= now]
+    recent = [e for e in entries if e.title and e.seen_time and since <= e.seen_time <= now]
     if not recent:
         return None
 
@@ -89,13 +88,6 @@ def run_digest(
         return EXIT_FAILED
     log.info("Digest sent.")
     return EXIT_OK
-
-
-def _seen_time(entry: SeenEntry) -> datetime | None:
-    try:
-        return datetime.strptime(entry.seen_at or "", _SEEN_AT_FORMAT).replace(tzinfo=LOCAL_TZ)
-    except ValueError:
-        return None
 
 
 def _day(moment: datetime) -> str:

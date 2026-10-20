@@ -10,6 +10,13 @@ class Category:
     label: str
     emoji: str
 
+    @property
+    def hashtag(self) -> str:
+        """e.g. "#Scholarship_Aid". Telegram hashtags may only contain letters,
+        digits and underscores; tapping one searches the chat for it."""
+        words = "".join(ch if ch.isalnum() else " " for ch in self.label).split()
+        return "#" + "_".join(words)
+
 
 GENERAL = Category("General", "📢")
 

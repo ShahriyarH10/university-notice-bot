@@ -44,7 +44,7 @@ class TestFormatMessage:
         )
         message = format_message(notice, "Details here")
         assert message.text == (
-            "🎓 <b>Admission</b>  ·  📅 12 Oct 2026\n"
+            "🎓 #Admission  ·  📅 12 Oct 2026\n"
             "\n"
             "<b>Admission Test Final Result</b>\n"
             "\n"
@@ -218,3 +218,11 @@ def test_pin_message_is_silent():
     url, data, _ = session.calls[0]
     assert url.endswith("/pinChatMessage")
     assert data == {"chat_id": "42", "message_id": "7", "disable_notification": "true"}
+
+
+def test_unpin_message():
+    session = FakeSession(FakeResponse(200, {"ok": True, "result": True}))
+    client(session).unpin_message(7)
+    url, data, _ = session.calls[0]
+    assert url.endswith("/unpinChatMessage")
+    assert data == {"chat_id": "42", "message_id": "7"}

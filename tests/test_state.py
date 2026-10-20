@@ -103,6 +103,8 @@ def test_save_leaves_no_temp_file_behind(tmp_path):
         "",
         '[{"title": "no url"}]',
         '[{"url": "https://a", "seen_at": 5}]',
+        '[{"url": "https://a", "pinned": "12"}]',
+        '[{"url": "https://a", "pinned": true}]',
     ],
 )
 def test_corrupt_file_raises_instead_of_reading_as_empty(tmp_path, content):
@@ -110,3 +112,21 @@ def test_corrupt_file_raises_instead_of_reading_as_empty(tmp_path, content):
     path.write_text(content)
     with pytest.raises(StateError):
         SeenStore(path).load()
+
+
+def test_pins_are_recorded_cleared_and_reloaded(tmp_path):
+    store = make_store(tmp_path)
+    store.add("https://a", title="A")
+    store.add("https://b", title="B")
+    store.set_pinned("https://a", 41)
+    store.set_pinned("https://b", 42)
+    store.set_pinned("https://a", None)
+    store.save()
+
+    assert json.loads(store.path.read_text()) == [
+        {"url": "https://a", "title": "A"},
+        {"url": "https://b", "title": "B", "pinned": 42},
+    ]
+    reloaded = make_store(tmp_path)
+    reloaded.load()
+    assert [(e.url, e.pinned) for e in reloaded.pinned()] == [("https://b", 42)]
