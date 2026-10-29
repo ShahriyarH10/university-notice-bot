@@ -6,6 +6,7 @@ import requests
 from notice_bot.models import Attachment, Notice
 from notice_bot.parser import DATE_UNAVAILABLE
 from notice_bot.telegram import (
+    CAPTION_LIMIT,
     MESSAGE_LIMIT,
     OutgoingMessage,
     TelegramClient,
@@ -73,6 +74,11 @@ class TestFormatMessage:
     def test_long_body_is_shortened(self):
         message = format_message(NOTICE, "word " * 2000, max_body_length=600)
         assert len(message.text) < MESSAGE_LIMIT
+        assert "…</blockquote>" in message.text
+
+    def test_caption_is_shortened_to_fit_with_its_link(self):
+        message = format_message(NOTICE, "word " * 2000, max_body_length=600 * 3, caption=True)
+        assert len(message.text_with_link) <= CAPTION_LIMIT
         assert "…</blockquote>" in message.text
 
     def test_oversized_message_is_rejected(self):
@@ -176,40 +182,68 @@ class TestSendMessage:
         assert "***" in str(info.value)
 
 
-class TestSendFile:
-    def test_document_is_uploaded_as_a_silent_reply_with_caption(self):
+class TestSendWithFiles:
+    def test_single_document_carries_the_notice_as_caption_and_button(self):
         session = FakeSession(FakeResponse(200, SENT))
-        client(session).send_file(PDF, b"%PDF", reply_to=5)
+        assert client(session).send_message(HI, [(PDF, b"%PDF")]) == 7
         url, data, files = session.calls[0]
         assert url.endswith("/sendDocument")
         assert files == {"document": ("a.pdf", b"%PDF")}
-        assert data["caption"] == "LL.B"
-        assert data["disable_notification"] == "true"
-        assert json.loads(data["reply_parameters"]) == {
-            "message_id": 5,
-            "allow_sending_without_reply": True,
-        }
+        assert data["caption"] == "hi"
+        assert data["parse_mode"] == "HTML"
+        assert json.loads(data["reply_markup"])["inline_keyboard"][0][0]["url"] == "https://x"
 
-    def test_image_is_sent_as_photo_without_empty_caption(self):
+    def test_single_image_is_sent_as_photo(self):
         session = FakeSession(FakeResponse(200, SENT))
-        client(session).send_file(PHOTO, b"img", reply_to=5)
-        url, data, files = session.calls[0]
+        client(session).send_message(HI, [(PHOTO, b"img")])
+        url, _, files = session.calls[0]
         assert url.endswith("/sendPhoto")
         assert files == {"photo": ("1.webp", b"img")}
-        assert "caption" not in data
 
     def test_rejected_photo_falls_back_to_document(self):
         session = FakeSession(
             FakeResponse(400, {"ok": False, "description": "PHOTO_INVALID_DIMENSIONS"}),
             FakeResponse(200, SENT),
         )
-        client(session).send_file(PHOTO, b"img", reply_to=5)
+        client(session).send_message(HI, [(PHOTO, b"img")])
         assert session.calls[1][0].endswith("/sendDocument")
 
     def test_rejected_document_raises(self):
         session = FakeSession(FakeResponse(400, {"ok": False, "description": "too big"}))
         with pytest.raises(TelegramError, match="too big"):
-            client(session).send_file(PDF, b"x", reply_to=5)
+            client(session).send_message(HI, [(PDF, b"x")])
+
+    def test_several_files_are_one_album_with_the_notice_on_the_first(self):
+        session = FakeSession(FakeResponse(200, {"ok": True, "result": [{"message_id": 9}, {}]}))
+        other = Attachment(url="https://x/b.pdf", filename="b.pdf", kind="document", label="B")
+        assert client(session).send_message(HI, [(PDF, b"1"), (other, b"2")]) == 9
+        url, data, files = session.calls[0]
+        assert url.endswith("/sendMediaGroup")
+        assert files == {"file0": ("a.pdf", b"1"), "file1": ("b.pdf", b"2")}
+        assert json.loads(data["media"]) == [
+            {
+                "type": "document",
+                "media": "attach://file0",
+                "caption": 'hi\n\n<a href="https://x">🔗 Read full notice</a>',
+                "parse_mode": "HTML",
+            },
+            {"type": "document", "media": "attach://file1", "caption": "B"},
+        ]
+
+    def test_mixed_album_is_sent_as_documents(self):
+        session = FakeSession(FakeResponse(200, {"ok": True, "result": [{"message_id": 9}]}))
+        client(session).send_message(HI, [(PHOTO, b"1"), (PDF, b"2")])
+        media = json.loads(session.calls[0][1]["media"])
+        assert [item["type"] for item in media] == ["document", "document"]
+
+    def test_photo_album_falls_back_to_documents(self):
+        session = FakeSession(
+            FakeResponse(400, {"ok": False, "description": "PHOTO_INVALID_DIMENSIONS"}),
+            FakeResponse(200, {"ok": True, "result": [{"message_id": 9}]}),
+        )
+        client(session).send_message(HI, [(PHOTO, b"1"), (PHOTO, b"2")])
+        assert json.loads(session.calls[0][1]["media"])[0]["type"] == "photo"
+        assert json.loads(session.calls[1][1]["media"])[0]["type"] == "document"
 
 
 def test_pin_message_is_silent():

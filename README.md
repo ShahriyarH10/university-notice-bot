@@ -9,6 +9,8 @@ It runs hourly on GitHub Actions, so there is no server to host.
 Each message looks like this:
 
 ```
+📄 adding-dropping-fall-2026-27.pdf                              (attached file, if any)
+
 🗂️ #Registration  ·  📅 27 Sep 2026
 
 Adding Dropping for Fall 2026-27
@@ -18,14 +20,15 @@ Adding Dropping for Fall 2026-27
 ▎ Date: Thursday, October 1 and Sunday, October 4, 2026. …      (tap to expand)
 
 [ 🔗 Read full notice ]
-
-  ↪ 📄 adding-dropping-fall-2026-27.pdf                          (reply with the attached file)
 ```
 
 - A **category hashtag** is guessed from the title: 🎓 #Admission, 📝 #Exams, 💰 #Scholarship_Aid, 💳 #Payments, 🗂️ #Registration, 💼 #Internship_Thesis, 🏖️ #Holiday, 🏆 #Events, 🛠️ #System, or 📢 #General. Tapping one in Telegram lists every notice with that tag. The rules live in `notice_bot/categories.py`.
 - The excerpt is a **collapsible quote**, and the link is a **button**, so messages stay compact.
-- **Attached files** (PDF schedules, seat plans, notices posted as images) are sent as silent replies
-  under the notice, so nobody has to open the website. Up to 5 per notice.
+- **Attached files** (PDF schedules, seat plans, notices posted as images) are attached to the notice
+  message itself, so nobody has to open the website. Up to 5 per notice. A notice with several files
+  is sent as one album; Telegram doesn't allow buttons on albums, so its link is part of the text.
+  The notice becomes the file's caption, which Telegram limits to 1024 characters, so the excerpt
+  may be shorter than for notices without files.
 - Notices tagged **Exams, Registration or Payments are pinned** in the chat. The bot keeps at most
   5 pins and removes each one after 14 days, so the pinned bar stays current. It only ever unpins
   its own pins. Change these with `pin_categories`, `max_pins` and `pin_days` in `notice_bot/config.py`.
@@ -36,9 +39,9 @@ Adding Dropping for Fall 2026-27
 
 1. Download the notice listing and parse out each notice (title, link, date).
 2. Compare the links with `last_notices.json`, the list of notices already delivered.
-3. For each new notice, oldest first, fetch its page for the full title, body and attached files, and send it to Telegram.
+3. For each new notice, oldest first, fetch its page for the full title, body and attached files, download the files, and send it to Telegram with the files attached.
 4. Record each delivered notice in `last_notices.json`. The workflow commits that file back to the repo, which is how the bot remembers state between runs.
-5. Upload the notice's files as replies to it, and pin it if its category is in `pin_categories`.
+5. Pin it if its category is in `pin_categories`.
 6. Unpin the bot's own pins that are over the limit or too old. The pinned message's ID is stored as `pinned` in that notice's entry until it is unpinned.
 
 `last_notices.json` records each notice the bot has handled:
@@ -59,7 +62,7 @@ Behaviour worth knowing:
 
 - **First run is silent.** If `last_notices.json` doesn't exist, the bot records what is on the board without sending anything, so you don't get dozens of old notices.
 - **Failures are reported, once.** If the board can't be read, parses to zero notices (the site layout changed, or Cloudflare blocked the request) or a message can't be delivered, the run exits non-zero. After 3 failed runs in a row the workflow sends one "⚠️ … has failed" message to the chat, and one "✅ … working again" message when a run succeeds. A one-off failure stays quiet. A notice that failed to send is not recorded, so the next run retries it. To change the threshold, edit `ALERT_AFTER` in `.github/workflows/schedule.yml`.
-- **Files and pins are best effort.** If an attachment can't be downloaded or uploaded, or the bot isn't allowed to pin, a warning is logged and the run carries on. The notice itself has already been delivered and recorded, so it is not sent twice.
+- **Files and pins are best effort.** A file that can't be downloaded is left out. If Telegram rejects the files, the notice is sent on its own. If the bot isn't allowed to pin, a warning is logged and the run carries on. The notice has already been delivered and recorded, so it is not sent twice.
 - **A corrupt state file stops the run** instead of being treated as empty, which would resend everything.
 - **Long titles are restored.** The listing truncates titles with "…", so the bot uses the full title from the notice page.
 

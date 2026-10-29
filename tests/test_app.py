@@ -58,16 +58,14 @@ class Outbox:
         self.files, self.pins, self.unpins = [], [], []
         self.fail_files, self.fail_pins, self.unpin_error = fail_files, fail_pins, unpin_error
 
-    def send_message(self, message):
+    def send_message(self, message, files=()):
         if any(marker in message.text for marker in self.fail_on):
             raise TelegramError("rejected")
-        self.messages.append(message.text)
-        return len(self.messages)  # message ID
-
-    def send_file(self, attachment, content, *, reply_to):
-        if self.fail_files:
+        if files and self.fail_files:
             raise TelegramError("file rejected")
-        self.files.append((attachment.filename, content, reply_to))
+        self.messages.append(message.text)
+        self.files += [(a.filename, content, len(self.messages)) for a, content in files]
+        return len(self.messages)  # message ID
 
     def pin_message(self, message_id):
         if self.fail_pins:
@@ -194,11 +192,11 @@ def test_first_run_records_details_too(settings):
     }
 
 
-def test_attachments_are_sent_as_replies_to_their_notice(settings):
+def test_attachments_are_attached_to_their_notice(settings):
     settings.state_file.write_text(json.dumps([URL_2, URL_3]))
     outbox = Outbox()
     assert check(settings, Site(detail=DETAIL_FILES), outbox) == EXIT_OK
-    assert [(name, reply_to) for name, _, reply_to in outbox.files] == [
+    assert [(name, message_id) for name, _, message_id in outbox.files] == [
         ("ll.-b.-1.pdf", 1),
         ("b.-pharm-1.pdf", 1),
         ("exam-schedule-[ug-&-pg).pdf", 1),
@@ -215,21 +213,31 @@ def test_attachments_beyond_the_limit_are_not_sent(settings):
     assert len(outbox.files) == 2
 
 
-def test_failed_attachments_do_not_fail_the_run_or_resend_the_notice(settings):
+def test_failed_downloads_do_not_hold_back_the_notice(settings):
     settings.state_file.write_text(json.dumps([URL_2, URL_3]))
     broken = {"https://www.aiub.edu/Files/Uploads/ll.-b.-1.pdf"}
     outbox = Outbox()
     assert check(settings, Site(detail=DETAIL_FILES, broken=broken), outbox) == EXIT_OK
+    assert len(outbox.messages) == 1
     assert len(outbox.files) == 3  # the others still went out
     assert URL_1 in saved(settings)
 
 
-def test_rejected_attachments_still_record_the_notice(settings):
+def test_rejected_attachments_fall_back_to_the_notice_alone(settings):
     settings.state_file.write_text(json.dumps([URL_2, URL_3]))
     outbox = Outbox(fail_files=True)
     assert check(settings, Site(detail=DETAIL_FILES), outbox) == EXIT_OK
     assert len(outbox.messages) == 1
+    assert outbox.files == []
     assert URL_1 in saved(settings)
+
+
+def test_notice_with_attachments_fits_in_a_caption(settings):
+    settings.state_file.write_text(json.dumps([URL_2, URL_3]))
+    detail = DETAIL_FILES.replace("</h1>", "</h1><div class='question-column'>" + "word " * 500)
+    outbox = Outbox()
+    check(settings, Site(detail=detail), outbox)
+    assert len(outbox.messages[0]) <= 1024
 
 
 def test_notices_in_pinned_categories_are_pinned(settings):

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Protocol
@@ -23,9 +23,9 @@ Download = Callable[[str], bytes]
 class Messenger(Protocol):
     """Where notices are delivered (TelegramClient in production)."""
 
-    def send_message(self, message: OutgoingMessage) -> int: ...
-
-    def send_file(self, attachment: Attachment, content: bytes, *, reply_to: int) -> None: ...
+    def send_message(
+        self, message: OutgoingMessage, files: Sequence[tuple[Attachment, bytes]] = ()
+    ) -> int: ...
 
     def pin_message(self, message_id: int) -> None: ...
 
@@ -95,7 +95,7 @@ def run(
             continue
         assert messenger is not None
         try:
-            message_id = messenger.send_message(message)
+            message_id = _send(notice, message, _download(attachments, download), messenger)
         except TelegramError as exc:
             failures += 1
             log.error("Could not send %r: %s", notice.title, exc)
@@ -103,9 +103,8 @@ def run(
         store.add(notice.url, title=notice.title, date=notice.date, seen_at=_now())
         store.save()  # persist per notice so a crash can't cause duplicates
 
-        # Extras are best-effort: the notice itself is already delivered and
-        # recorded, and retrying them would mean sending it again.
-        _send_attachments(attachments, message_id, download, messenger)
+        # Pinning is best-effort: the notice itself is already delivered and
+        # recorded, and retrying it would mean sending the notice again.
         if pin:
             try:
                 messenger.pin_message(message_id)
@@ -192,7 +191,7 @@ def _prepare(
         body = detail.body
         attachments = detail.attachments[: settings.max_attachments]
         # A notice that is only a file often has "Please Click Here for More
-        # Details" as its whole text; the file itself follows the message.
+        # Details" as its whole text; the file itself is attached.
         if attachments and len(body) < 80 and "click here" in body.casefold():
             body = ""
         if len(detail.attachments) > len(attachments):
@@ -205,19 +204,36 @@ def _prepare(
         # The listing truncates long titles with "..."; prefer the full one.
         if detail.title and _is_truncation_of(notice.title, detail.title):
             notice = replace(notice, title=detail.title)
-    message = format_message(notice, body, max_body_length=settings.max_body_length)
+    message = format_message(
+        notice, body, max_body_length=settings.max_body_length, caption=bool(attachments)
+    )
     return notice, message, attachments
 
 
-def _send_attachments(
-    attachments: tuple[Attachment, ...],
-    reply_to: int,
-    download: Download,
-    messenger: Messenger,
-) -> None:
+def _download(
+    attachments: tuple[Attachment, ...], download: Download
+) -> list[tuple[Attachment, bytes]]:
+    """Download what can be downloaded; a missing file shouldn't hold back the notice."""
+    files = []
     for attachment in attachments:
         try:
-            content = download(attachment.url)
-            messenger.send_file(attachment, content, reply_to=reply_to)
-        except (FetchError, TelegramError) as exc:
-            log.warning("Could not send attachment %s: %s", attachment.filename, exc)
+            files.append((attachment, download(attachment.url)))
+        except FetchError as exc:
+            log.warning("Could not download attachment %s: %s", attachment.filename, exc)
+    return files
+
+
+def _send(
+    notice: Notice,
+    message: OutgoingMessage,
+    files: list[tuple[Attachment, bytes]],
+    messenger: Messenger,
+) -> int:
+    """Send the notice with its files attached, or on its own if Telegram
+    rejects the files."""
+    if files:
+        try:
+            return messenger.send_message(message, files)
+        except TelegramError as exc:
+            log.warning("Sending %r without its files: %s", notice.title, exc)
+    return messenger.send_message(message)
