@@ -43,8 +43,13 @@ def run(
     download: Download,
     messenger: Messenger | None,
     dry_run: bool = False,
+    resync: bool = False,
 ) -> int:
     """Check the notice board once and deliver anything new.
+
+    With `resync`, record everything on the board as delivered without sending
+    it, keeping the existing state (and pins). That is the way out of the
+    flood guard below.
 
     Returns a process exit code: non-zero if the board could not be read or any
     delivery failed, so the scheduled workflow surfaces the problem.
@@ -68,15 +73,26 @@ def run(
         # First run: record the current board instead of flooding the chat
         # with every notice that is already there.
         log.info("No state file yet; recording %d existing notices without sending.", len(notices))
-        seen_at = _now()
-        for notice in notices:
-            store.add(notice.url, title=notice.title, date=notice.date, seen_at=seen_at)
-        if not dry_run:
-            store.save()
+        _record(store, notices, dry_run=dry_run)
         return EXIT_OK
     store.load()
 
     new_notices = [n for n in notices if n.url not in store]
+    if resync:
+        log.info("Resync: recording %d notice(s) without sending.", len(new_notices))
+        _record(store, new_notices, dry_run=dry_run)
+        return EXIT_OK
+    # Notices are checked every hour, so the board always overlaps what was
+    # already sent. If none of it does, the site most likely changed its URLs,
+    # and sending would repeat the whole board in the chat.
+    if len(store) and len(new_notices) == len(notices):
+        log.error(
+            "None of the %d notices on the board were seen before; the site's links may "
+            "have changed. Nothing was sent. Check the board, then run with --resync to "
+            "record them without sending.",
+            len(notices),
+        )
+        return EXIT_FAILED
     if not new_notices:
         log.info("No new notices. Standing by.")
 
@@ -121,6 +137,15 @@ def run(
 
     _unpin_old(store, messenger, settings, dry_run=dry_run)
     return EXIT_FAILED if failures else EXIT_OK
+
+
+def _record(store: SeenStore, notices: Sequence[Notice], *, dry_run: bool) -> None:
+    """Mark `notices` as delivered without sending them."""
+    seen_at = _now()
+    for notice in notices:
+        store.add(notice.url, title=notice.title, date=notice.date, seen_at=seen_at)
+    if not dry_run:
+        store.save()
 
 
 def _unpin_old(

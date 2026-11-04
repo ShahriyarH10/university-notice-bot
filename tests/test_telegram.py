@@ -81,10 +81,18 @@ class TestFormatMessage:
         assert len(message.text_with_link) <= CAPTION_LIMIT
         assert "…</blockquote>" in message.text
 
-    def test_oversized_message_is_rejected(self):
-        huge = Notice(title="t" * 5000, url="https://x", date="d")
-        with pytest.raises(TelegramError):
-            format_message(huge, "")
+    def test_oversized_title_is_shortened_to_fit(self):
+        huge = Notice(title="word " * 1000, url="https://x", date="d")
+        message = format_message(huge, "")
+        assert len(message.text) <= MESSAGE_LIMIT
+        assert "…</b>" in message.text
+
+    def test_oversized_title_is_shortened_to_fit_a_caption(self):
+        # "&" grows to "&amp;" when escaped, so the escaped length is what must fit.
+        huge = Notice(title="R&D " * 400, url="https://x", date="d")
+        message = format_message(huge, "some body text " * 20, caption=True)
+        assert len(message.text_with_link) <= CAPTION_LIMIT
+        assert "…</b>" in message.text
 
 
 class FakeResponse:

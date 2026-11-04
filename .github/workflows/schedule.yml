@@ -5,6 +5,11 @@ on:
     # Not on the hour: GitHub delays or drops scheduled runs at :00, its busiest minute.
     - cron: '17 * * * *'
   workflow_dispatch:
+    inputs:
+      resync:
+        description: 'Record the whole board as sent without sending it (clears the "never seen before" guard)'
+        type: boolean
+        default: false
 
 # Runs share the state file in the repo, so they must never overlap.
 concurrency:
@@ -38,7 +43,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python -m notice_bot
+          RESYNC: ${{ inputs.resync && '--resync' || '' }}
+        run: python -m notice_bot $RESYNC
 
       # Runs even when the scraper failed part-way: notices that were already
       # delivered must be recorded, or the next run would send them again.
@@ -50,7 +56,19 @@ jobs:
           if [ -n "$(git status --porcelain last_notices.json)" ]; then
             git add last_notices.json
             git commit -m "chore: update notice state [skip ci]"
-            git push
+            # If main moved during the run (e.g. a code push), a plain push is
+            # rejected and the state would be lost, re-sending these notices.
+            for attempt in 1 2 3; do
+              if git pull --rebase --quiet; then
+                git push && exit 0
+              else
+                git rebase --abort || true
+              fi
+              echo "Push attempt ${attempt} failed; retrying."
+              sleep $((attempt * 5))
+            done
+            echo "::error::Could not push the state file; delivered notices may be sent again."
+            exit 1
           else
             echo "State unchanged — nothing to commit."
           fi
