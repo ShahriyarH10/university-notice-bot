@@ -192,7 +192,13 @@ class TelegramClient:
     def _send_album(
         self, message: OutgoingMessage, files: Sequence[tuple[Attachment, bytes]]
     ) -> int:
-        """Send the files as one album with the notice as the first caption.
+        """Send the files as one album with the notice as the caption of the
+        last file.
+
+        Telegram shows each document's caption under that document, so a
+        caption on the first file would split the files around the notice
+        text. On the last one, all the files come first and the text closes
+        the album.
 
         An album can't mix photos with documents, so a mixed set is sent as
         documents.
@@ -209,9 +215,10 @@ class TelegramClient:
     ) -> int:
         media: list[dict[str, str]] = []
         uploads: dict[str, tuple[str, bytes]] = {}
+        last = len(files) - 1
         for i, (attachment, content) in enumerate(files):
             item = {"type": kind, "media": f"attach://file{i}"}
-            if i == 0:
+            if i == last:
                 item.update(caption=message.text_with_link, parse_mode="HTML")
             elif attachment.label and kind == "document":
                 # Each document shows its own caption; a photo album only one.
@@ -219,7 +226,8 @@ class TelegramClient:
             media.append(item)
             uploads[f"file{i}"] = (attachment.filename, content)
         result = self._call("sendMediaGroup", {"media": json.dumps(media)}, files=uploads)
-        return int(result[0]["message_id"])
+        # Pin the file that carries the notice, so the pin shows its text.
+        return int(result[-1]["message_id"])
 
     @staticmethod
     def _button(message: OutgoingMessage) -> str:

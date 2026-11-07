@@ -221,22 +221,34 @@ class TestSendWithFiles:
         with pytest.raises(TelegramError, match="too big"):
             client(session).send_message(HI, [(PDF, b"x")])
 
-    def test_several_files_are_one_album_with_the_notice_on_the_first(self):
-        session = FakeSession(FakeResponse(200, {"ok": True, "result": [{"message_id": 9}, {}]}))
+    def test_several_files_are_one_album_with_the_notice_under_the_last(self):
+        session = FakeSession(
+            FakeResponse(200, {"ok": True, "result": [{"message_id": 9}, {"message_id": 10}]})
+        )
         other = Attachment(url="https://x/b.pdf", filename="b.pdf", kind="document", label="B")
-        assert client(session).send_message(HI, [(PDF, b"1"), (other, b"2")]) == 9
+        # The ID of the message with the notice text, so that is what is pinned.
+        assert client(session).send_message(HI, [(other, b"1"), (PDF, b"2")]) == 10
         url, data, files = session.calls[0]
         assert url.endswith("/sendMediaGroup")
-        assert files == {"file0": ("a.pdf", b"1"), "file1": ("b.pdf", b"2")}
+        assert files == {"file0": ("b.pdf", b"1"), "file1": ("a.pdf", b"2")}
         assert json.loads(data["media"]) == [
+            {"type": "document", "media": "attach://file0", "caption": "B"},
             {
                 "type": "document",
-                "media": "attach://file0",
+                "media": "attach://file1",
                 "caption": 'hi\n\n<a href="https://x">🔗 Read full notice</a>',
                 "parse_mode": "HTML",
             },
-            {"type": "document", "media": "attach://file1", "caption": "B"},
         ]
+
+    def test_photo_album_has_the_notice_on_the_last_photo_only(self):
+        session = FakeSession(
+            FakeResponse(200, {"ok": True, "result": [{"message_id": 9}, {"message_id": 10}]})
+        )
+        client(session).send_message(HI, [(PHOTO, b"1"), (PHOTO, b"2")])
+        media = json.loads(session.calls[0][1]["media"])
+        assert "caption" not in media[0]
+        assert media[1]["caption"].startswith("hi")
 
     def test_mixed_album_is_sent_as_documents(self):
         session = FakeSession(FakeResponse(200, {"ok": True, "result": [{"message_id": 9}]}))

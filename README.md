@@ -4,7 +4,7 @@
 
 A Telegram bot that watches the [AIUB notice board](https://www.aiub.edu/category/notices) and
 sends every new notice to a chat, with the date, the full title, a short excerpt and a link.
-It runs hourly on GitHub Actions, so there is no server to host.
+It runs every 45 minutes on GitHub Actions, so there is no server to host.
 
 Each message looks like this:
 
@@ -26,7 +26,8 @@ Adding Dropping for Fall 2026-27
 - The excerpt is a **collapsible quote**, and the link is a **button**, so messages stay compact.
 - **Attached files** (PDF schedules, seat plans, notices posted as images) are attached to the notice
   message itself, so nobody has to open the website. Up to 5 per notice. A notice with several files
-  is sent as one album; Telegram doesn't allow buttons on albums, so its link is part of the text.
+  is sent as one album, all files first with the notice text under the last one; Telegram doesn't
+  allow buttons on albums, so its link is part of the text.
   The notice becomes the file's caption, which Telegram limits to 1024 characters, so the excerpt
   may be shorter than for notices without files.
 - Notices tagged **Exams, Registration or Payments are pinned** in the chat. The bot keeps at most
@@ -61,7 +62,7 @@ before this was added are bare `{"url": …}` objects (or plain URL strings, whi
 Behaviour worth knowing:
 
 - **First run is silent.** If `last_notices.json` doesn't exist, the bot records what is on the board without sending anything, so you don't get dozens of old notices.
-- **Failures are reported, once.** If the board can't be read, parses to zero notices (the site layout changed, or Cloudflare blocked the request) or a message can't be delivered, the run exits non-zero. After 3 failed runs in a row the workflow sends one "⚠️ … has failed" message to the chat, and one "✅ … working again" message when a run succeeds. A one-off failure stays quiet. A notice that failed to send is not recorded, so the next run retries it. To change the threshold, edit `ALERT_AFTER` in `.github/workflows/schedule.yml`.
+- **Failures are reported, once.** If the board can't be read, parses to zero notices (the site layout changed, or Cloudflare blocked the request) or a message can't be delivered, the run exits non-zero. After 3 failed runs in a row (about 2 hours) the workflow sends one "⚠️ … has failed" message to the chat, and one "✅ … working again" message when a run succeeds. A one-off failure stays quiet. A notice that failed to send is not recorded, so the next run retries it. To change the threshold, edit `ALERT_AFTER` in `.github/workflows/schedule.yml`.
 - **Files and pins are best effort.** A file that can't be downloaded is left out. If Telegram rejects the files, the notice is sent on its own. If the bot isn't allowed to pin, a warning is logged and the run carries on. The notice has already been delivered and recorded, so it is not sent twice.
 - **A corrupt state file stops the run** instead of being treated as empty, which would resend everything.
 - **A board it has never seen is not sent.** If none of the notices on the board are in `last_notices.json`, the site has most likely changed its links, and sending would repeat the whole board in the chat. The bot sends nothing and fails the run (so the alert above fires after 3 runs). Check the board, then run **Hourly Notice Scraper** from the Actions tab with **resync** ticked, or `python -m notice_bot --resync` locally. That records the board as sent without sending anything, and keeps existing pins.
@@ -87,7 +88,7 @@ Behaviour worth knowing:
    | `TELEGRAM_CHAT_ID`   | the chat ID from step 1.3   |
 
 3. Under **Settings → Actions → General → Workflow permissions**, choose *Read and write permissions* so the workflow can commit the state file.
-4. If you are starting fresh, delete `last_notices.json` so the first run records the current board silently. Then trigger **Hourly Notice Scraper** from the Actions tab, or wait for the next run (17 minutes past each hour). **Weekly Digest** can be triggered the same way to try it out.
+4. If you are starting fresh, delete `last_notices.json` so the first run records the current board silently. Then trigger **Hourly Notice Scraper** from the Actions tab, or wait for the next run (every 45 minutes). **Weekly Digest** can be triggered the same way to try it out.
 
 ## Local development
 
@@ -124,7 +125,7 @@ notice_bot/
   config.py     settings
 tests/          pytest suite, with HTML fixtures modelled on the real pages
 .github/workflows/
-  schedule.yml  hourly run + state commit + failure/recovery alert
+  schedule.yml  45-minute run + state commit + failure/recovery alert
   digest.yml    weekly digest, Sunday morning
   ci.yml        lint, format check and tests on every push and PR
 ```

@@ -2,8 +2,16 @@ name: Hourly Notice Scraper
 
 on:
   schedule:
-    # Not on the hour: GitHub delays or drops scheduled runs at :00, its busiest minute.
-    - cron: '17 * * * *'
+    # Every 45 minutes, off the hour. GitHub delays or drops many scheduled runs
+    # (an hourly cron fired only every 4-8 hours), so extra slots keep the gap
+    # short. The concurrency group below stops runs overlapping; minutes are free
+    # for public repos.
+    # Cron can't count 45 minutes across hours, so these four lines repeat every
+    # 3 hours: 00:07, 00:52, 01:37, 02:22, 03:07, … (UTC).
+    - cron: '7 0-23/3 * * *'
+    - cron: '52 0-23/3 * * *'
+    - cron: '37 1-23/3 * * *'
+    - cron: '22 2-23/3 * * *'
   workflow_dispatch:
     inputs:
       resync:
@@ -81,7 +89,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           JOB_STATUS: ${{ job.status }}
-          ALERT_AFTER: 3  # failed runs in a row before alerting
+          ALERT_AFTER: 3  # failed runs in a row before alerting (about 2 hours)
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
