@@ -89,10 +89,21 @@ def format_message(
         meta += f"  ·  📅 {html.escape(notice.date)}"
 
     url = safe_url(notice.url)
-    head = "\n".join([meta, "", f"<b>{html.escape(notice.title)}</b>"])
     # Telegram counts characters after parsing the HTML, so measuring the
     # markup errs on the safe side.
     limit = CAPTION_LIMIT - len(_link_suffix(url)) if caption else MESSAGE_LIMIT
+
+    # A title too long to fit is shortened rather than rejected: a notice
+    # that can never be sent would fail every run. The full title is one tap
+    # away on the notice page.
+    title_length = len(notice.title)
+    while True:
+        title = html.escape(shorten(notice.title, title_length))
+        head = "\n".join([meta, "", f"<b>{title}</b>"])
+        excess = len(head) - limit
+        if excess <= 0 or title_length <= 1:
+            break
+        title_length = max(title_length - excess, 1)
 
     text = head
     while body:
@@ -105,8 +116,6 @@ def format_message(
         if max_body_length < 50:  # not worth showing
             text = head
             break
-    if len(text) > limit:  # only possible with an absurdly long title
-        raise TelegramError(f"message of {len(text)} characters exceeds Telegram's limit")
     return OutgoingMessage(text=text, button_url=url)
 
 

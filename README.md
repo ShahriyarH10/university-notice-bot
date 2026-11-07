@@ -64,7 +64,9 @@ Behaviour worth knowing:
 - **Failures are reported, once.** If the board can't be read, parses to zero notices (the site layout changed, or Cloudflare blocked the request) or a message can't be delivered, the run exits non-zero. After 3 failed runs in a row the workflow sends one "⚠️ … has failed" message to the chat, and one "✅ … working again" message when a run succeeds. A one-off failure stays quiet. A notice that failed to send is not recorded, so the next run retries it. To change the threshold, edit `ALERT_AFTER` in `.github/workflows/schedule.yml`.
 - **Files and pins are best effort.** A file that can't be downloaded is left out. If Telegram rejects the files, the notice is sent on its own. If the bot isn't allowed to pin, a warning is logged and the run carries on. The notice has already been delivered and recorded, so it is not sent twice.
 - **A corrupt state file stops the run** instead of being treated as empty, which would resend everything.
-- **Long titles are restored.** The listing truncates titles with "…", so the bot uses the full title from the notice page.
+- **A board it has never seen is not sent.** If none of the notices on the board are in `last_notices.json`, the site has most likely changed its links, and sending would repeat the whole board in the chat. The bot sends nothing and fails the run (so the alert above fires after 3 runs). Check the board, then run **Hourly Notice Scraper** from the Actions tab with **resync** ticked, or `python -m notice_bot --resync` locally. That records the board as sent without sending anything, and keeps existing pins.
+- **State is never silently lost.** If `main` changed during a run, the workflow rebases its state commit onto it before pushing, and retries. If the push still fails, the run fails.
+- **Long titles are restored.** The listing truncates titles with "…", so the bot uses the full title from the notice page. A title too long for a Telegram message is shortened instead of blocking the notice.
 
 ## Setup
 
@@ -101,6 +103,7 @@ ruff check . && ruff format --check .
 python -m notice_bot --dry-run              # print what would be sent; sends nothing, changes nothing
 python -m notice_bot --dry-run --state-file empty.json   # with `[]` in empty.json: preview every notice on the board
 python -m notice_bot --digest --dry-run     # preview the weekly digest
+python -m notice_bot --resync               # record the board as sent without sending (no Telegram needed)
 ```
 
 To send for real from your machine, export `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` and run

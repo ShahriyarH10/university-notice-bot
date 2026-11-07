@@ -341,3 +341,34 @@ def test_dry_run_reports_unpins_without_changing_state(settings, capsys):
     check(settings, Site(), None, dry_run=True)
     assert "would unpin Pinned 10" in capsys.readouterr().out
     assert pins_in(settings) == [10]
+
+
+def test_board_with_nothing_seen_before_is_not_sent(settings):
+    # e.g. the site changed its links: every notice looks new.
+    settings.state_file.write_text(json.dumps(["https://www.aiub.edu/old-style-link"]))
+    outbox = Outbox()
+    assert check(settings, Site(), outbox) == EXIT_FAILED
+    assert outbox.messages == []
+    assert saved(settings) == ["https://www.aiub.edu/old-style-link"]
+
+
+def test_resync_records_the_board_without_sending_and_keeps_pins(settings):
+    settings.state_file.write_text(json.dumps([{"url": "https://www.aiub.edu/old", "pinned": 7}]))
+    site = Site()
+    assert check(settings, site, None, resync=True) == EXIT_OK
+    assert site.requested == ["https://board"]  # no detail pages or files
+    assert saved(settings) == ["https://www.aiub.edu/old", URL_1, URL_2, URL_3]
+    assert pins_in(settings) == [7]
+
+    outbox = Outbox()
+    assert check(settings, Site(), outbox) == EXIT_OK
+    assert outbox.messages == []
+
+
+def test_overlong_title_with_files_is_still_sent(settings):
+    settings.state_file.write_text(json.dumps([URL_2, URL_3]))
+    long_title = "Very long notice title " * 60
+    detail = DETAIL_FILES.replace("<h1>", f"<h1>{long_title}", 1)
+    outbox = Outbox()
+    assert check(settings, Site(detail=detail), outbox) == EXIT_OK
+    assert len(outbox.messages) == 1

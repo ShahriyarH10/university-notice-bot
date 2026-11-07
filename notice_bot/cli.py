@@ -38,6 +38,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="send a summary of the past week's notices instead of checking the board",
     )
+    parser.add_argument(
+        "--resync",
+        action="store_true",
+        help="record every notice on the board as sent without sending it "
+        "(use after the bot refuses to send a board it has never seen)",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="enable debug logging")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
@@ -52,12 +58,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     settings = Settings.from_env(state_file=args.state_file)
-    if not args.dry_run and not (settings.telegram_token and settings.telegram_chat_id):
+    if args.resync and args.digest:
+        log.error("--resync and --digest cannot be used together.")
+        return EXIT_FAILED
+    if (
+        not args.dry_run
+        and not args.resync
+        and not (settings.telegram_token and settings.telegram_chat_id)
+    ):
         log.error("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set (or use --dry-run).")
         return EXIT_FAILED
 
     messenger = None
-    if not args.dry_run:
+    if not args.dry_run and not args.resync:
         assert settings.telegram_token and settings.telegram_chat_id
         messenger = TelegramClient(settings.telegram_token, settings.telegram_chat_id)
 
@@ -73,7 +86,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_bytes=settings.max_attachment_bytes,
         )
         return run(
-            settings, fetch=fetch, download=download, messenger=messenger, dry_run=args.dry_run
+            settings,
+            fetch=fetch,
+            download=download,
+            messenger=messenger,
+            dry_run=args.dry_run,
+            resync=args.resync,
         )
     except StateError as exc:
         log.error("%s", exc)
